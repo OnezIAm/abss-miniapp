@@ -7,6 +7,7 @@ import { Tag } from "primereact/tag";
 import { SelectButton } from "primereact/selectbutton";
 import { Dropdown } from "primereact/dropdown";
 import { Calendar } from "primereact/calendar";
+import { InputNumber } from "primereact/inputnumber";
 import { Toast } from "primereact/toast";
 import { Dialog } from "primereact/dialog";
 import { api } from "@/app/lib/api";
@@ -33,6 +34,8 @@ type BankEntry = {
   amountType: string;
   balance: number;
   bankCode: string;
+  attachedCount?: number;
+  matchedTotal?: number;
 };
 
 const BankingPage = () => {
@@ -56,7 +59,9 @@ const BankingPage = () => {
   const [invoiceFirst, setInvoiceFirst] = useState<number>(0);
   const [invoiceLoading, setInvoiceLoading] = useState<boolean>(false);
   const [invoiceSelection, setInvoiceSelection] = useState<any[]>([]);
+  const [recIncludeIds, setRecIncludeIds] = useState<string[]>([]);
   const [reconciliations, setReconciliations] = useState<Record<string, { invoiceIds: string[]; none?: boolean; delta: number }>>({});
+  const [allocations, setAllocations] = useState<Record<string, number>>({});
 
   const totalBalance = useMemo(() => {
     return transactions.reduce((acc, t) => acc + t.amount, 0);
@@ -413,15 +418,6 @@ const BankingPage = () => {
     }
   };
 
-  const monthKey = (d: string) => {
-    const iso = formatDateToISO(d);
-    const parts = iso.split("-");
-    if (parts.length >= 2) return `${parts[0]}-${parts[1]}`;
-    const dt = new Date(d);
-    if (!isNaN(dt.getTime()))
-      return `${dt.getFullYear()}-${`${dt.getMonth() + 1}`.padStart(2, "0")}`;
-    return "";
-  };
 
   const selectedMonthKey = useMemo(() => {
     if (!monthFilter) return "";
@@ -445,6 +441,8 @@ const BankingPage = () => {
       balance: e.balance,
       status: "posted",
       bankCode: e.bankCode,
+      attachedCount: e.attachedCount,
+      matchedTotal: e.matchedTotal,
     }));
   }, [dbEntries, directionFilter, selectedMonthKey]);
 
@@ -453,10 +451,15 @@ const BankingPage = () => {
       ? filteredTransactions.map((t) => ({ ...t, bankCode: bank || "" }))
       : filteredDbTransactions;
 
-  const refreshInvoices = async (offset = 0, limit = invoiceRows) => {
+  const refreshInvoices = async (offset = 0, limit = invoiceRows, includeIds?: string[]) => {
     try {
       setInvoiceLoading(true);
-      const { data } = await api.get("/invoices", { params: { limit, offset } });
+      const params: any = { limit, offset, excludeFullyPaid: true };
+      const idsToInclude = includeIds || recIncludeIds;
+      if (idsToInclude.length > 0) {
+        params.includeIds = idsToInclude.join(",");
+      }
+      const { data } = await api.get("/invoices", { params });
       const entries =
         Array.isArray(data)
           ? data
@@ -470,6 +473,7 @@ const BankingPage = () => {
       setInvoiceTotal(typeof p.total === "number" ? p.total : entries.length);
       setInvoiceRows(typeof p.limit === "number" ? p.limit : limit);
       setInvoiceFirst(typeof p.offset === "number" ? p.offset : offset);
+      return entries;
     } catch (e: any) {
       const status = e?.response?.status;
       const detail =
@@ -483,6 +487,7 @@ const BankingPage = () => {
         detail,
         life: 6000,
       });
+      return [];
     } finally {
       setInvoiceLoading(false);
     }
@@ -498,45 +503,141 @@ const BankingPage = () => {
       });
       return;
     }
-    setRecEntry({ id: row.entryId, amount: Math.abs(row.amount), description: row.description });
-    const rec = reconciliations[row.entryId];
-    setInvoiceSelection(
-      rec?.invoiceIds?.length
-        ? invoiceItems.filter((x) => rec.invoiceIds.includes(String(x.id)))
-        : []
-    );
+    setRecEntry({ id: row.entryId, amount: Math.abs(row.amount), description: row.description, });
+    
+    let ids: string[] = [];
+    let selection: any[] = [];
+
+    if (row.attachedCount > 0) {
+      try {
+        const { data } = await api.get(`/bank-entries/${row.entryId}/invoices`);
+        selection = data;
+        ids = data.map((x: any) => String(x.id));
+        
+        const newAllocations: Record<string, number> = {};
+        data.forEach((d: any) => {
+            newAllocations[d.id] = d.matchedAmount;
+        });
+        setAllocations(newAllocations);
+
+        setReconciliations((prev) => ({
+          ...prev,
+          [row.entryId]: { invoiceIds: ids, delta: Math.abs(row.amount) - (row.matchedTotal || 0) },
+        }));
+      } catch (e) {
+        console.error("Fetch attached invoices error", e);
+      }
+    } else {
+        setAllocations({});
+    }
+
+    setRecIncludeIds(ids);
     setRecVisible(true);
-    await refreshInvoices(0, invoiceRows);
+    const fetchedItems = await refreshInvoices(0, invoiceRows, ids);
+    
+    // Ensure selection uses the exact objects from the table data to avoid reference issues
+    // and ensure they are visually selected.
+    if (ids.length > 0 && fetchedItems && fetchedItems.length > 0) {
+        const attachedSet = new Set(ids);
+        const validSelection = fetchedItems.filter((item: any) => attachedSet.has(String(item.id)));
+        setInvoiceSelection(validSelection);
+    } else {
+        setInvoiceSelection([]);
+    }
   };
 
   const invoiceSum = useMemo(() => {
     return invoiceSelection.reduce((acc, it) => {
-      const val = typeof it.amount === "number" ? it.amount : Number(it.amount || 0);
+      // Use allocation if set, otherwise 0
+      const alloc = allocations[it.id];
+      if (typeof alloc === 'number') return acc + alloc;
+      
+      const val = typeof it.totalAmount === "number" ? it.totalAmount : Number(it.totalAmount || 0);
       return acc + (isNaN(val) ? 0 : val);
     }, 0);
-  }, [invoiceSelection]);
+  }, [invoiceSelection, allocations]);
 
   const currentDelta = useMemo(() => {
     const amt = recEntry ? recEntry.amount : 0;
     return amt - invoiceSum;
   }, [recEntry, invoiceSum]);
 
-  const attachSelected = () => {
+  const saveReconcile = async (entryId: string, invoices: any[], note?: string) => {
+    try {
+      const payload = {
+        invoices: invoices.map((inv) => ({
+          id: inv.id,
+          amount: allocations[inv.id] !== undefined ? allocations[inv.id] : inv.totalAmount, 
+        })),
+        note,
+        mode: "replace",
+      };
+      await api.post(`/bank-entries/${entryId}/reconcile`, payload);
+      toast.current?.show({
+        severity: "success",
+        summary: "Reconciled",
+        detail: "Saved successfully",
+      });
+      const newIds = invoices.map((i) => String(i.id));
+      setRecIncludeIds(newIds);
+      await refreshInvoices(invoiceFirst, invoiceRows, newIds);
+    } catch (e: any) {
+      console.error("Reconcile error", e);
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Failed to save reconciliation",
+      });
+    }
+  };
+
+  const attachSelected = async () => {
     if (!recEntry?.id) return;
-    const ids = invoiceSelection.map((x) => String(x.id));
-    setReconciliations((prev) => ({
-      ...prev,
-      [recEntry.id!]: { invoiceIds: ids, delta: Math.abs(currentDelta) < 0.0001 ? 0 : currentDelta },
-    }));
+    // const ids = invoiceSelection.map((x) => String(x.id));
+
+    await saveReconcile(recEntry.id, invoiceSelection);
+
+    try {
+      const { data: updatedEntry } = await api.get<BankEntry>(
+        `/bank-entries/${recEntry.id}`
+      );
+      setDbEntries((prev) =>
+        prev.map((e) => (e.id === recEntry.id ? updatedEntry : e))
+      );
+      // Clear local override so table uses fresh DB data
+      setReconciliations((prev) => {
+        const next = { ...prev };
+        delete next[recEntry.id!];
+        return next;
+      });
+    } catch (e) {
+      console.error("Failed to refresh entry", e);
+    }
+
     setRecVisible(false);
   };
 
-  const setNoRecords = () => {
+  const setNoRecords = async () => {
     if (!recEntry?.id) return;
-    setReconciliations((prev) => ({
-      ...prev,
-      [recEntry.id!]: { invoiceIds: [], none: true, delta: recEntry.amount },
-    }));
+
+    await saveReconcile(recEntry.id, []);
+
+    try {
+      const { data: updatedEntry } = await api.get<BankEntry>(
+        `/bank-entries/${recEntry.id}`
+      );
+      setDbEntries((prev) =>
+        prev.map((e) => (e.id === recEntry.id ? updatedEntry : e))
+      );
+      setReconciliations((prev) => {
+        const next = { ...prev };
+        delete next[recEntry.id!];
+        return next;
+      });
+    } catch (e) {
+      console.error("Failed to refresh entry", e);
+    }
+
     setInvoiceSelection([]);
     setRecVisible(false);
   };
@@ -838,8 +939,18 @@ const BankingPage = () => {
               style={{ width: "10%" }}
               body={(row: any) => {
                 const rec = row.entryId ? reconciliations[row.entryId] : undefined;
-                if (!rec) return <span>-</span>;
-                const val = rec.delta;
+                let val = 0;
+                let hasData = false;
+
+                if (rec) {
+                  val = rec.delta;
+                  hasData = true;
+                } else if (typeof row.matchedTotal === "number" && row.attachedCount > 0) {
+                  val = Math.abs(row.amount) - row.matchedTotal;
+                  hasData = true;
+                }
+
+                if (!hasData) return <span>-</span>;
                 const ok = Math.abs(val) < 0.0001;
                 return <Tag value={ok ? "0" : formatCurrency(val)} severity={ok ? "success" : "warning"} />;
               }}
@@ -900,15 +1011,67 @@ const BankingPage = () => {
           loading={invoiceLoading}
           responsiveLayout="scroll"
           selection={invoiceSelection}
-          onSelectionChange={(e) => setInvoiceSelection(e.value)}
+          onSelectionChange={(e) => {
+            const newSelection = e.value;
+            setInvoiceSelection(newSelection);
+            setAllocations((prev) => {
+              const next = { ...prev };
+              newSelection.forEach((item: any) => {
+                // If not set, init default
+                if (next[item.id] === undefined) {
+                  // If it's a new item, default to remaining amount
+                  const remaining = (Number(item.totalAmount) || 0) - (Number(item.paidAmount) || 0);
+                  next[item.id] = remaining > 0 ? remaining : 0;
+                }
+              });
+              return next;
+            });
+          }}
           dataKey="id"
+          isDataSelectable={(e) => {
+            const paid = Number(e.data.paidAmount || 0);
+            const total = Number(e.data.totalAmount || 0);
+            const isSelected = invoiceSelection.some((sel) => sel.id === e.data.id);
+            return paid < total || isSelected;
+          }}
         >
           <Column selectionMode="multiple" headerStyle={{ width: "3rem" }} />
           <Column field="invoiceNo" header="Invoice No" />
           <Column field="invoiceDate" header="Date" body={(r) => <span>{formatDisplayDate(r.invoiceDate)}</span>} />
-          <Column field="customer" header="Customer" />
-          <Column field="amount" header="Amount" body={(r) => <span>{formatCurrency(Number(r.amount || 0))}</span>} />
-          <Column field="status" header="Status" body={(r) => <Tag value={r.status} />} />
+          <Column field="customerName" header="Customer" />
+          <Column field="totalAmount" header="Total" body={(r) => <span>{formatCurrency(Number(r.totalAmount || 0))}</span>} />
+          <Column field="paidAmount" header="Paid" body={(r) => <span>{formatCurrency(Number(r.paidAmount || 0))}</span>} />
+          <Column
+            header="To Pay"
+            body={(r) => {
+              // Only show input if selected
+              const isSelected = invoiceSelection.some((s) => s.id === r.id);
+              if (!isSelected) return null;
+
+              return (
+                <InputNumber
+                  value={allocations[r.id] ?? 0}
+                  onValueChange={(e) => {
+                    setAllocations((prev) => ({ ...prev, [r.id]: e.value || 0 }));
+                  }}
+                  mode="currency"
+                  currency="IDR"
+                  locale="en-US"
+                  minFractionDigits={2}
+                />
+              );
+            }}
+          />
+          <Column
+            header="Payment Status"
+            body={(r) => {
+              const paid = Number(r.paidAmount || 0);
+              const total = Number(r.totalAmount || 0);
+              if (paid >= total) return <Tag severity="success" value="Paid" />;
+              if (paid > 0) return <Tag severity="warning" value="Partial" />;
+              return <Tag severity="info" value="Unpaid" />;
+            }}
+          />
         </DataTable>
         <div className="flex justify-content-end gap-2 mt-3">
           <Button label="Set No Records" severity="secondary" onClick={setNoRecords} />

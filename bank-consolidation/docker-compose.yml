@@ -16,6 +16,8 @@ services:
       READ_DSN: "bankc:sUr1kX!YVbOqV@CX@tcp(mariadb-master)/bank-consolidation?charset=utf8&parseTime=true&loc=Local"
       WRITE_DSN: "bankc:sUr1kX!YVbOqV@CX@tcp(mariadb-master)/bank-consolidation?charset=utf8&parseTime=true&loc=Local"
       SEED_DEV: "1"
+    volumes:
+      - .:/app
 
 networks:
   abss-network:

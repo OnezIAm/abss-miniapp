@@ -2,14 +2,16 @@ package controllers
 
 import (
 	"bank-consolidation/models"
-	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-type TransactionController struct{ DB *sql.DB }
+type TransactionController struct{ DB *gorm.DB }
 
 func (c TransactionController) CreateOrList(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -28,35 +30,32 @@ func (c TransactionController) CreateOrList(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "id is required", http.StatusBadRequest)
 			return
 		}
-		_, err = c.DB.Exec(`INSERT INTO transactions (id, raw_csv, import_source, validation_status) VALUES (?, ?, ?, 'pending')`, body.ID, string(b), body.ImportSource)
-		if err != nil {
+
+		t := models.Transaction{
+			ID:               body.ID,
+			RawCSV:           string(b),
+			ImportSource:     body.ImportSource,
+			ValidationStatus: "pending",
+		}
+
+		if err := c.DB.Create(&t).Error; err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "id": body.ID})
 	case http.MethodGet:
-		rows, err := c.DB.Query(`SELECT id, import_source, validation_status, import_timestamp FROM transactions WHERE deleted_at IS NULL ORDER BY import_timestamp DESC LIMIT 100`)
-		if err != nil {
+		var list []models.Transaction
+		if err := c.DB.Select("id", "import_source", "validation_status", "import_timestamp").
+			Order("import_timestamp DESC").
+			Limit(100).
+			Find(&list).Error; err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer rows.Close()
-		var list []models.Transaction
-		for rows.Next() {
-			var id, vs, ts string
-			var src sql.NullString
-			if err := rows.Scan(&id, &src, &vs, &ts); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			t := models.Transaction{ID: id, ValidationStatus: vs, ImportTimestamp: ts}
-			if src.Valid {
-				t.ImportSource = src.String
-			}
-			list = append(list, t)
-		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(list)
 	default:
@@ -88,22 +87,22 @@ func (c TransactionController) MapCategories(w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	tx, err := c.DB.Begin()
+
+	err := c.DB.Transaction(func(tx *gorm.DB) error {
+		for _, cid := range body.CategoryIDs {
+			tc := models.TransactionCategory{TransactionID: id, CategoryID: cid}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&tc).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	for _, cid := range body.CategoryIDs {
-		if _, err := tx.Exec(`INSERT IGNORE INTO transaction_categories (transaction_id, category_id) VALUES (?, ?)`, id, cid); err != nil {
-			_ = tx.Rollback()
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "transactionId": id, "count": len(body.CategoryIDs)})
 }
