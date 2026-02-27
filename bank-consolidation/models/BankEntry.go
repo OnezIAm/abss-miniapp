@@ -19,9 +19,21 @@ type BankEntry struct {
 	Balance         float64        `json:"balance" gorm:"type:decimal(18,2);not null"`
 	BankCode        string         `json:"bankCode" gorm:"type:varchar(20);not null;default:'UNKNOWN'"`
 	Fingerprint     string         `json:"fingerprint" gorm:"type:varchar(64);uniqueIndex"`
-	AttachedCount   int            `json:"attachedCount" gorm:"->;<-:false"`
-	MatchedTotal    float64        `json:"matchedTotal" gorm:"->;<-:false"`
+	AttachedCount   int            `json:"attachedCount" gorm:"-"`
+	MatchedTotal    float64        `json:"matchedTotal" gorm:"-"`
+	Delta           float64        `json:"delta" gorm:"-"`
+	AttachedInvoices []BankEntryInvoiceSummary `json:"attachedInvoices,omitempty" gorm:"-"`
 	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
+type BankEntryInvoiceSummary struct {
+	ID            string    `json:"id"`
+	InvoiceNo     string    `json:"invoiceNo"`
+	InvoiceDate   time.Time `json:"invoiceDate"`
+	CustomerName  string    `json:"customerName"`
+	Status        string    `json:"status"`
+	TotalAmount   float64   `json:"totalAmount"`
+	MatchedAmount float64   `json:"matchedAmount"`
 }
 
 func (b *BankEntry) UnmarshalJSON(data []byte) error {

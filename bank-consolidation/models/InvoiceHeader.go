@@ -10,19 +10,19 @@ import (
 )
 
 type InvoiceHeader struct {
-	InvoiceHeaderID   string         `json:"invoiceHeaderId" gorm:"column:id;primaryKey;type:varchar(64)"`
+	InvoiceHeaderID   interface{}    `json:"invoiceHeaderId" gorm:"column:id;primaryKey;type:varchar(64)"`
 	InvoiceNo         string         `json:"invoiceNo" gorm:"type:varchar(64);not null"`
 	InvoiceSequenceNo string         `json:"invoiceSequenceNo" gorm:"-"`
 	InvoiceDate       time.Time      `json:"invoiceDate" gorm:"type:datetime;not null"`
 	TradeDate         string         `json:"tradeDate" gorm:"-"`
-	SalesOrderID      string         `json:"salesOrderId" gorm:"-"`
+	SalesOrderID      interface{}    `json:"salesOrderId" gorm:"-"`
 	SalesOrderNo      string         `json:"salesOrderNo" gorm:"-"`
-	DeliveryOrderID   string         `json:"deliveryOrderId" gorm:"-"`
+	DeliveryOrderID   interface{}    `json:"deliveryOrderId" gorm:"-"`
 	DeliveryOrderNo   string         `json:"deliveryOrderNo" gorm:"-"`
-	PurchaseOrderNo   string         `json:"purchaseOrderNo" gorm:"-"`
-	SalesID           string         `json:"salesId" gorm:"-"`
+	PurchaseOrderNo   interface{}    `json:"purchaseOrderNo" gorm:"-"`
+	SalesID           interface{}    `json:"salesId" gorm:"-"`
 	SalesName         string         `json:"salesName" gorm:"-"`
-	CustomerID        string         `json:"customerId" gorm:"column:customer_id;type:varchar(64);not null"`
+	CustomerID        interface{}    `json:"customerId" gorm:"column:customer_id;type:varchar(64);not null"`
 	CustomerName      string         `json:"customerName" gorm:"column:customer_name;type:varchar(255);not null"`
 	DeliverTo         string         `json:"deliverTo" gorm:"-"`
 	Status            string         `json:"status" gorm:"type:varchar(32);not null;default:'pending'"`
@@ -30,10 +30,11 @@ type InvoiceHeader struct {
 	TotalTax          float64        `json:"totalTax" gorm:"type:decimal(15,2);not null"`
 	TotalProduct      int            `json:"totalProduct" gorm:"-"`
 	DueDate           string         `json:"dueDate" gorm:"-"`
-	Termin            string         `json:"termin" gorm:"-"`
+	Termin            interface{}    `json:"termin" gorm:"-"`
 	Notes             string         `json:"notes" gorm:"-"`
 	CompanyCode       string         `json:"companyCode" gorm:"column:company_code;type:varchar(64);not null"`
 	OtherExpense      float64        `json:"otherExpense" gorm:"-"`
+	Details           []InvoiceDetail `json:"details" gorm:"-"`
 	DeletedAt         gorm.DeletedAt `json:"-" gorm:"index"`
 }
 

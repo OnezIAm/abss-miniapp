@@ -3,14 +3,14 @@ package models
 import "gorm.io/gorm"
 
 type InvoiceDetail struct {
-	InvoiceDetailID     string         `json:"invoiceDetailId" gorm:"column:id;primaryKey;type:varchar(64)"`
-	InvoiceHeaderID     string         `json:"invoiceHeaderId" gorm:"column:header_id;type:varchar(64);not null;index"`
-	ProductID           string         `json:"productId" gorm:"column:product_id;type:varchar(64);not null"`
+	InvoiceDetailID     interface{}    `json:"invoiceDetailId" gorm:"column:id;primaryKey;type:varchar(64)"`
+	InvoiceHeaderID     interface{}    `json:"invoiceHeaderId" gorm:"column:header_id;type:varchar(64);not null;index"`
+	ProductID           interface{}    `json:"productId" gorm:"column:product_id;type:varchar(64);not null"`
 	ProductName         string         `json:"productName" gorm:"column:description;type:varchar(255);not null"`
-	UomID               string         `json:"uomId" gorm:"-"`
+	UomID               interface{}    `json:"uomId" gorm:"-"`
 	PackingName         string         `json:"packingName" gorm:"-"`
 	Qty                 float64        `json:"qty" gorm:"column:quantity;type:decimal(15,4);not null"`
-	Disc                float64        `json:"disc" gorm:"-"`
+	Disc                interface{}    `json:"disc" gorm:"-"`
 	UnitPrice           float64        `json:"unitPrice" gorm:"column:unit_price;type:decimal(15,4);not null"`
 	Amount              float64        `json:"amount" gorm:"type:decimal(15,4);not null"`
 	Ppn                 float64        `json:"ppn" gorm:"column:tax_amount;type:decimal(15,4);not null"`

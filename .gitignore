@@ -1,2 +1,5 @@
 bank-consolidation-ui/.next/*
 bank-consolidationApp
+bank-consolidation/frontend/out/*
+bank-consolidation/frontend/.next/*
+bank-consolidation/frontend/public/*

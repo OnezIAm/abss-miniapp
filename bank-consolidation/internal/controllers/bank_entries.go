@@ -4,10 +4,13 @@ import (
 	"bank-consolidation/models"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	mrand "math/rand"
 	"net/http"
 	"strconv"
@@ -19,6 +22,12 @@ import (
 )
 
 type BankEntryController struct{ DB *gorm.DB }
+
+type bankEntryRow struct {
+	models.BankEntry
+	AttachedCount int     `gorm:"column:attached_count"`
+	MatchedTotal  float64 `gorm:"column:matched_total"`
+}
 
 func genID(prefix string) string {
 	var b [4]byte
@@ -70,11 +79,6 @@ func (c BankEntryController) CreateOrList(w http.ResponseWriter, r *http.Request
 			return
 		}
 		// body.TransactionDate is already time.Time due to custom UnmarshalJSON in model
-		// but wait, the model's UnmarshalJSON parses it.
-		// Let's assume the model is correct.
-		// However, I should check if the UnmarshalJSON works as expected.
-		// The custom UnmarshalJSON in BankEntry.go handles string parsing.
-		// So `body.TransactionDate` is a valid time.Time.
 
 		if strings.TrimSpace(body.ID) == "" {
 			body.ID = genID("BE")
@@ -91,94 +95,97 @@ func (c BankEntryController) CreateOrList(w http.ResponseWriter, r *http.Request
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "id": body.ID})
 	case http.MethodGet:
 		q := r.URL.Query()
-		db := c.DB.Model(&models.BankEntry{})
+		db := c.DB.Model(&models.BankEntry{}).
+			Select("bank_entries.*, COALESCE(st.attached_count,0) AS attached_count, COALESCE(st.matched_total,0) AS matched_total").
+			Joins("LEFT JOIN (SELECT bank_entry_id, COUNT(1) AS attached_count, COALESCE(SUM(matched_amount),0) AS matched_total FROM bank_entry_invoices GROUP BY bank_entry_id) st ON st.bank_entry_id = bank_entries.id")
 
-		if v := q.Get("bankCode"); strings.TrimSpace(v) == "" {
+		bankCode := strings.TrimSpace(q.Get("bankCode"))
+		if bankCode == "" {
 			http.Error(w, "bankCode is required", http.StatusBadRequest)
 			return
 		} else {
-			db = db.Where("bank_code = ?", v)
-		}
-		if v := q.Get("branch"); v != "" {
-			db = db.Where("branch = ?", v)
-		}
-		if v := q.Get("amountType"); v != "" {
-			db = db.Where("amount_type = ?", v)
-		}
-		if v := q.Get("desc"); v != "" {
-			db = db.Where("description LIKE ?", "%"+v+"%")
-		}
-		if v := q.Get("startDate"); v != "" {
-			if dt, err := parseDate(v); err == nil {
-				db = db.Where("transaction_date >= ?", dt)
-			} else {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-		if v := q.Get("endDate"); v != "" {
-			if dt, err := parseDate(v); err == nil {
-				db = db.Where("transaction_date <= ?", dt)
-			} else {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-		if v := q.Get("month"); v != "" {
-			mt, err := time.Parse("2006-01", v)
-			if err != nil {
-				http.Error(w, "invalid month, expected YYYY-MM", http.StatusBadRequest)
-				return
-			}
-			start := mt
-			next := mt.AddDate(0, 1, 0)
-			db = db.Where("transaction_date >= ? AND transaction_date < ?", start, next)
+			db = db.Where("bank_code = ?", bankCode)
 		}
 
+		// Optional amountType filter (CR/DB)
+		amountType := strings.ToUpper(strings.TrimSpace(q.Get("amountType")))
+		if amountType == "CR" || amountType == "DB" {
+			db = db.Where("amount_type = ?", amountType)
+		}
+
+		// Optional month filter: YYYY-MM (inclusive start, exclusive next month)
+		monthKey := strings.TrimSpace(q.Get("month"))
+		var monthStart, monthEnd time.Time
+		if monthKey != "" {
+			parts := strings.Split(monthKey, "-")
+			if len(parts) == 2 {
+				y, yErr := strconv.Atoi(parts[0])
+				m, mErr := strconv.Atoi(parts[1])
+				if yErr == nil && mErr == nil && m >= 1 && m <= 12 {
+					monthStart = time.Date(y, time.Month(m), 1, 0, 0, 0, 0, time.UTC)
+					monthEnd = monthStart.AddDate(0, 1, 0)
+					db = db.Where("transaction_date >= ? AND transaction_date < ?", monthStart, monthEnd)
+				}
+			}
+		}
+
+		// Pagination: limit & offset
+		limit := 0
+		offset := 0
+		if limStr := strings.TrimSpace(q.Get("limit")); limStr != "" {
+			if lim, err := strconv.Atoi(limStr); err == nil && lim > 0 {
+				limit = lim
+				db = db.Limit(limit)
+			}
+		}
+		if offStr := strings.TrimSpace(q.Get("offset")); offStr != "" {
+			if off, err := strconv.Atoi(offStr); err == nil && off >= 0 {
+				offset = off
+				db = db.Offset(offset)
+			}
+		}
+
+		// Total count with same filters (without joins/pagination)
+		countDB := c.DB.Model(&models.BankEntry{}).Where("bank_code = ?", bankCode)
+		if amountType == "CR" || amountType == "DB" {
+			countDB = countDB.Where("amount_type = ?", amountType)
+		}
+		if !monthStart.IsZero() && !monthEnd.IsZero() {
+			countDB = countDB.Where("transaction_date >= ? AND transaction_date < ?", monthStart, monthEnd)
+		}
 		var total int64
-		if err := db.Count(&total).Error; err != nil {
+		if err := countDB.Count(&total).Error; err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		db = db.Select("bank_entries.*, COALESCE(st.attached_count,0) AS attached_count, COALESCE(st.matched_total,0) AS matched_total").
-			Joins("LEFT JOIN (SELECT bank_entry_id, COUNT(1) AS attached_count, COALESCE(SUM(matched_amount),0) AS matched_total FROM bank_entry_invoices GROUP BY bank_entry_id) st ON st.bank_entry_id = bank_entries.id").
-			Order("transaction_date DESC")
-
-		lim := 50
-		off := 0
-		if v := q.Get("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
-				lim = n
-			}
-		}
-		if v := q.Get("offset"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-				off = n
-			}
-		}
-
-		var items []models.BankEntry
-		if err := db.Limit(lim).Offset(off).Find(&items).Error; err != nil {
+		var rows []bankEntryRow
+		if err := db.Order("transaction_date DESC").Scan(&rows).Error; err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
+		list := make([]models.BankEntry, len(rows))
+		for i, r := range rows {
+			e := r.BankEntry
+			e.AttachedCount = r.AttachedCount
+			e.MatchedTotal = r.MatchedTotal
+			e.Delta = math.Abs(e.Amount) - e.MatchedTotal
+			list[i] = e
+		}
 		w.Header().Set("Content-Type", "application/json")
-		flat := q.Get("flat")
-		if flat == "1" || strings.EqualFold(flat, "true") {
-			_ = json.NewEncoder(w).Encode(items)
-			return
-		}
-		hasNext := off+lim < int(total)
-		nextOffset := off + lim
-		if !hasNext {
-			nextOffset = off
-		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"items": items,
+			"data": list,
 			"pagination": map[string]any{
-				"total": total, "limit": lim, "offset": off, "hasNext": hasNext, "nextOffset": nextOffset,
+				"total":  total,
+				"limit":  limit,
+				"offset": offset,
+				"hasNext": func() bool {
+					// if limit is zero, treat as no paging
+					if limit <= 0 {
+						return false
+					}
+					return int64(offset+limit) < total
+				}(),
 			},
 		})
 	default:
@@ -196,12 +203,13 @@ func (c BankEntryController) GetByID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	var m models.BankEntry
+
+	var row bankEntryRow
 	err := c.DB.Model(&models.BankEntry{}).
 		Select("bank_entries.*, COALESCE(st.attached_count,0) AS attached_count, COALESCE(st.matched_total,0) AS matched_total").
 		Joins("LEFT JOIN (SELECT bank_entry_id, COUNT(1) AS attached_count, COALESCE(SUM(matched_amount),0) AS matched_total FROM bank_entry_invoices GROUP BY bank_entry_id) st ON st.bank_entry_id = bank_entries.id").
 		Where("bank_entries.id = ?", id).
-		First(&m).Error
+		Scan(&row).Error
 
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -211,6 +219,23 @@ func (c BankEntryController) GetByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	m := row.BankEntry
+	m.AttachedCount = row.AttachedCount
+	m.MatchedTotal = row.MatchedTotal
+	m.Delta = math.Abs(m.Amount) - m.MatchedTotal
+
+	var attached []models.BankEntryInvoiceSummary
+	if err := c.DB.Table("bank_entry_invoices bei").
+		Select("ih.id, ih.invoice_no, ih.invoice_date, ih.customer_name, ih.status, ih.total_amount, bei.matched_amount").
+		Joins("JOIN invoice_headers ih ON ih.id = bei.invoice_header_id").
+		Where("bei.bank_entry_id = ?", id).
+		Scan(&attached).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	m.AttachedInvoices = attached
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(m)
 }
@@ -459,19 +484,7 @@ func (c BankEntryController) ListAttachedInvoices(w http.ResponseWriter, r *http
 		return
 	}
 
-	var list []map[string]any
-	// Using Raw SQL for join is often cleaner for complex projections not mapping directly to a single model
-	// But we can try to map to a struct
-	type Result struct {
-		ID            string
-		InvoiceNo     string
-		InvoiceDate   time.Time
-		CustomerName  string
-		Status        string
-		TotalAmount   float64
-		MatchedAmount float64
-	}
-	var results []Result
+	var results []models.BankEntryInvoiceSummary
 
 	err := c.DB.Table("bank_entry_invoices bei").
 		Select("ih.id, ih.invoice_no, ih.invoice_date, ih.customer_name, ih.status, ih.total_amount, bei.matched_amount").
@@ -484,23 +497,11 @@ func (c BankEntryController) ListAttachedInvoices(w http.ResponseWriter, r *http
 		return
 	}
 
-	for _, m := range results {
-		list = append(list, map[string]any{
-			"id":            m.ID,
-			"invoiceNo":     m.InvoiceNo,
-			"invoiceDate":   m.InvoiceDate,
-			"customerName":  m.CustomerName,
-			"status":        m.Status,
-			"totalAmount":   m.TotalAmount,
-			"matchedAmount": m.MatchedAmount,
-		})
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	if list == nil {
-		list = []map[string]any{}
+	if results == nil {
+		results = []models.BankEntryInvoiceSummary{}
 	}
-	_ = json.NewEncoder(w).Encode(list)
+	_ = json.NewEncoder(w).Encode(results)
 }
 
 func (c BankEntryController) GenerateSample(w http.ResponseWriter, r *http.Request) {
@@ -548,4 +549,162 @@ func (c BankEntryController) GenerateSample(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "5 sample bank entries generated"})
+}
+
+func (c BankEntryController) UploadCSV(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		http.Error(w, "File too large", http.StatusBadRequest)
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Error retrieving file", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	bankCode := r.FormValue("bankCode")
+	if bankCode == "" {
+		http.Error(w, "bankCode is required", http.StatusBadRequest)
+		return
+	}
+
+	reader := csv.NewReader(file)
+	var entries []models.BankEntry
+	firstLine := true
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "Error reading CSV: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if len(record) < 5 {
+			continue
+		}
+
+		// Try parsing date from first column
+		dt, err := parseDate(record[0])
+		if err != nil {
+			if firstLine {
+				firstLine = false
+				continue // Skip header
+			}
+			continue // Skip invalid rows
+		}
+		firstLine = false
+
+		amount, err := strconv.ParseFloat(record[3], 64)
+		if err != nil {
+			continue
+		}
+
+		entry := models.BankEntry{
+			ID:              genID("BE"),
+			TransactionDate: dt,
+			Description:     record[1],
+			Branch:          record[2],
+			Amount:          amount,
+			AmountType:      record[4],
+			BankCode:        bankCode,
+		}
+		entry.Fingerprint = computeFingerprint(entry.TransactionDate, entry.Description, entry.Branch, entry.Amount, entry.AmountType, entry.BankCode)
+
+		entries = append(entries, entry)
+	}
+
+	if len(entries) > 0 {
+		if err := c.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&entries).Error; err != nil {
+			http.Error(w, "Error saving to DB: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+		"count":  len(entries),
+	})
+}
+
+func (c BankEntryController) ExportReconciled(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment;filename=reconciled_entries.csv")
+
+	writer := csv.NewWriter(w)
+	defer writer.Flush()
+
+	// Write header
+	writer.Write([]string{"Date", "Description", "BankCode", "Amount", "Type", "Matched Amount", "Delta", "Invoice No", "Customer", "Invoice Date", "Invoice Total", "Allocated"})
+
+	var rows []bankEntryRow
+	// Find entries that have some matching
+	db := c.DB.Model(&models.BankEntry{}).
+		Select("bank_entries.*, COALESCE(st.attached_count,0) AS attached_count, COALESCE(st.matched_total,0) AS matched_total").
+		Joins("JOIN (SELECT bank_entry_id, COUNT(1) AS attached_count, COALESCE(SUM(matched_amount),0) AS matched_total FROM bank_entry_invoices GROUP BY bank_entry_id) st ON st.bank_entry_id = bank_entries.id")
+
+	// Filter by date range if provided
+	startDateStr := r.URL.Query().Get("startDate")
+	endDateStr := r.URL.Query().Get("endDate")
+	if startDateStr != "" {
+		if t, err := parseDate(startDateStr); err == nil {
+			db = db.Where("bank_entries.transaction_date >= ?", t)
+		}
+	}
+	if endDateStr != "" {
+		if t, err := parseDate(endDateStr); err == nil {
+			db = db.Where("bank_entries.transaction_date <= ?", t)
+		}
+	}
+
+	if err := db.Order("bank_entries.transaction_date").Scan(&rows).Error; err != nil {
+		// If error, we can't write JSON to a CSV stream easily, so just log or ignore for now in this snippet
+		return
+	}
+
+	// We need detailed invoice info
+	for _, r := range rows {
+		var invoices []struct {
+			MatchedAmount float64
+			InvoiceNo     string
+			CustomerName  string
+			InvoiceDate   time.Time
+			TotalAmount   float64
+		}
+
+		c.DB.Table("bank_entry_invoices").
+			Select("bank_entry_invoices.matched_amount, invoice_headers.invoice_no, invoice_headers.customer_name, invoice_headers.invoice_date, invoice_headers.total_amount").
+			Joins("JOIN invoice_headers ON invoice_headers.id = bank_entry_invoices.invoice_header_id").
+			Where("bank_entry_invoices.bank_entry_id = ?", r.ID).
+			Scan(&invoices)
+
+		delta := math.Abs(r.Amount) - r.MatchedTotal
+
+		for _, inv := range invoices {
+			writer.Write([]string{
+				r.TransactionDate.Format("2006-01-02"),
+				r.Description,
+				r.BankCode,
+				fmt.Sprintf("%.2f", r.Amount),
+				r.AmountType,
+				fmt.Sprintf("%.2f", r.MatchedTotal),
+				fmt.Sprintf("%.2f", delta),
+				inv.InvoiceNo,
+				inv.CustomerName,
+				inv.InvoiceDate.Format("2006-01-02"),
+				fmt.Sprintf("%.2f", inv.TotalAmount),
+				fmt.Sprintf("%.2f", inv.MatchedAmount),
+			})
+		}
+	}
 }

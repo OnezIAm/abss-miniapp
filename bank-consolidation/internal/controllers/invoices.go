@@ -16,26 +16,21 @@ import (
 
 type InvoiceController struct{ DB *gorm.DB }
 
-type InvoicePayload struct {
-	Header  models.InvoiceHeader   `json:"header"`
-	Details []models.InvoiceDetail `json:"details"`
-}
-
-func validateInvoicePayload(p InvoicePayload) error {
-	if p.Header.InvoiceHeaderID == "" {
+func validateInvoiceHeader(h models.InvoiceHeader) error {
+	if h.InvoiceHeaderID == nil || fmt.Sprintf("%v", h.InvoiceHeaderID) == "" {
 		return errors.New("invoiceHeaderId is required")
 	}
-	if p.Header.InvoiceNo == "" {
+	if h.InvoiceNo == "" {
 		return errors.New("invoiceNo is required")
 	}
-	if len(p.Details) == 0 {
+	if len(h.Details) == 0 {
 		return errors.New("details must not be empty")
 	}
-	for i, d := range p.Details {
-		if d.InvoiceDetailID == "" {
+	for i, d := range h.Details {
+		if d.InvoiceDetailID == nil || fmt.Sprintf("%v", d.InvoiceDetailID) == "" {
 			return errors.New("details[" + strconv.Itoa(i) + "].invoiceDetailId is required")
 		}
-		if d.ProductID == "" {
+		if d.ProductID == nil || fmt.Sprintf("%v", d.ProductID) == "" {
 			return errors.New("details[" + strconv.Itoa(i) + "].productId is required")
 		}
 	}
@@ -47,32 +42,28 @@ func (c InvoiceController) Create(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var payload InvoicePayload
+	var header models.InvoiceHeader
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&payload); err != nil {
+	if err := dec.Decode(&header); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := validateInvoicePayload(payload); err != nil {
+	if err := validateInvoiceHeader(header); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	err := c.DB.Transaction(func(tx *gorm.DB) error {
 		// Prepare header
-		header := payload.Header
-		header.Status = "pending"
-		header.TotalTax = 0 // Will be calculated or assumed 0 as per original code? Original code set it to 0 in INSERT but loop might calculate?
-		// Actually original code: INSERT ... VALUES (..., 0, ?) -> TotalTax = 0.
-		// But wait, the loop calculates tax? No, the loop inserts into invoice_details with calculated tax, but doesn't update header.
-		// Let's stick to original behavior: Header TotalTax = 0 in INSERT.
+		if header.Status == "" {
+			header.Status = "pending"
+		}
 
 		if err := tx.Create(&header).Error; err != nil {
 			return err
 		}
 
-		for _, d := range payload.Details {
+		for _, d := range header.Details {
 			detail := d
 			detail.InvoiceHeaderID = header.InvoiceHeaderID
 			if err := tx.Create(&detail).Error; err != nil {
@@ -91,9 +82,68 @@ func (c InvoiceController) Create(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":          "ok",
-		"invoiceHeaderId": payload.Header.InvoiceHeaderID,
-		"invoiceNo":       payload.Header.InvoiceNo,
-		"totalDetails":    len(payload.Details),
+		"invoiceHeaderId": header.InvoiceHeaderID,
+		"invoiceNo":       header.InvoiceNo,
+		"totalDetails":    len(header.Details),
+	})
+}
+
+func (c InvoiceController) BulkCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var headers []models.InvoiceHeader
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&headers); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(headers) == 0 {
+		http.Error(w, "empty list", http.StatusBadRequest)
+		return
+	}
+
+	for i, h := range headers {
+		if err := validateInvoiceHeader(h); err != nil {
+			http.Error(w, fmt.Sprintf("index %d: %v", i, err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	err := c.DB.Transaction(func(tx *gorm.DB) error {
+		for _, header := range headers {
+			if header.Status == "" {
+				header.Status = "pending"
+			}
+
+			if err := tx.Create(&header).Error; err != nil {
+				return err
+			}
+
+			for _, d := range header.Details {
+				detail := d
+				detail.InvoiceHeaderID = header.InvoiceHeaderID
+				if err := tx.Create(&detail).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"count":  len(headers),
 	})
 }
 
@@ -127,15 +177,15 @@ func (c InvoiceController) GetByID(w http.ResponseWriter, r *http.Request) {
 	// Transform to response format if needed, or just return models
 	// Original code returned a specific structure. Let's match it.
 	h := struct {
-		ID           string  `json:"id"`
-		InvoiceNo    string  `json:"invoiceNo"`
-		InvoiceDate  string  `json:"invoiceDate"`
-		CustomerID   string  `json:"customerId"`
-		CustomerName string  `json:"customerName"`
-		Status       string  `json:"status"`
-		TotalAmount  float64 `json:"totalAmount"`
-		TotalTax     float64 `json:"totalTax"`
-		CompanyCode  string  `json:"companyCode"`
+		ID           interface{} `json:"id"`
+		InvoiceNo    string      `json:"invoiceNo"`
+		InvoiceDate  string      `json:"invoiceDate"`
+		CustomerID   interface{} `json:"customerId"`
+		CustomerName string      `json:"customerName"`
+		Status       string      `json:"status"`
+		TotalAmount  float64     `json:"totalAmount"`
+		TotalTax     float64     `json:"totalTax"`
+		CompanyCode  string      `json:"companyCode"`
 	}{
 		ID:           header.InvoiceHeaderID,
 		InvoiceNo:    header.InvoiceNo,
@@ -150,14 +200,14 @@ func (c InvoiceController) GetByID(w http.ResponseWriter, r *http.Request) {
 
 	// Details structure in original code
 	type DetailResponse struct {
-		ID          string  `json:"invoiceDetailId"`
-		ProductID   string  `json:"productId"`
-		ProductName string  `json:"productName"`
-		Qty         float64 `json:"qty"`
-		UnitPrice   float64 `json:"unitPrice"`
-		Amount      float64 `json:"amount"`
-		PpnPercent  float64 `json:"ppnPercent"`
-		Ppn         float64 `json:"ppn"`
+		ID          interface{} `json:"invoiceDetailId"`
+		ProductID   interface{} `json:"productId"`
+		ProductName string      `json:"productName"`
+		Qty         float64     `json:"qty"`
+		UnitPrice   float64     `json:"unitPrice"`
+		Amount      float64     `json:"amount"`
+		PpnPercent  float64     `json:"ppnPercent"`
+		Ppn         float64     `json:"ppn"`
 	}
 	var detailsResp []DetailResponse
 	for _, d := range details {
@@ -215,23 +265,9 @@ func (c InvoiceController) CreateOrList(w http.ResponseWriter, r *http.Request) 
 			condition := fmt.Sprintf("total_amount > %s", paidSubquery)
 
 			if inc := q.Get("includeIds"); inc != "" {
-				idsRaw := strings.Split(inc, ",")
-				var ids []string
-				for _, id := range idsRaw {
-					if trimmed := strings.TrimSpace(id); trimmed != "" {
-						ids = append(ids, trimmed)
-					}
-				}
-
+				ids := strings.Split(inc, ",")
 				if len(ids) > 0 {
-					db = db.Where(fmt.Sprintf("(%s OR invoice_headers.id IN ?)", condition), ids)
-
-					// Prioritize included IDs so they appear on the first page
-					quotedIds := make([]string, len(ids))
-					for i, id := range ids {
-						quotedIds[i] = fmt.Sprintf("'%s'", strings.ReplaceAll(id, "'", "''"))
-					}
-					db = db.Order(gorm.Expr(fmt.Sprintf("CASE WHEN invoice_headers.id IN (%s) THEN 1 ELSE 0 END DESC", strings.Join(quotedIds, ","))))
+					db = db.Where(fmt.Sprintf("(%s OR id IN ?)", condition), ids)
 				} else {
 					db = db.Where(condition)
 				}
@@ -266,18 +302,18 @@ func (c InvoiceController) CreateOrList(w http.ResponseWriter, r *http.Request) 
 		// Select fields including paid_amount
 		type Result struct {
 			models.InvoiceHeader
-			PaidAmount float64 `json:"paidAmount" gorm:"column:paid_amount"`
+			PaidAmount float64 `json:"paidAmount"`
 		}
 		var results []Result
 
 		// We need to select specific fields to populate the struct correctly, especially the computed column
 		// GORM can scan into struct.
-		if err := db.Select("invoice_headers.*, " + paidSubquery + " as paid_amount").Scan(&results).Error; err != nil {
+		if err := db.Select("*, " + paidSubquery + " as paid_amount").Scan(&results).Error; err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		var list []map[string]any
+		list := make([]map[string]any, 0)
 		for _, m := range results {
 			list = append(list, map[string]any{
 				"id":           m.InvoiceHeaderID,
