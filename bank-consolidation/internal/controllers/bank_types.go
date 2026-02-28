@@ -4,6 +4,7 @@ import (
 	"bank-consolidation/models"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -17,6 +18,7 @@ func (c BankTypeController) CreateOrList(w http.ResponseWriter, r *http.Request)
 			Name        string `json:"name"`
 			Code        string `json:"code"`
 			Description string `json:"description"`
+			Format      string `json:"format"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -40,6 +42,10 @@ func (c BankTypeController) CreateOrList(w http.ResponseWriter, r *http.Request)
 			Name:        body.Name,
 			Code:        body.Code,
 			Description: body.Description,
+			Format:      body.Format,
+		}
+		if bankType.Format == "" {
+			bankType.Format = "GENERIC"
 		}
 
 		if err := c.DB.Create(&bankType).Error; err != nil {
@@ -62,4 +68,45 @@ func (c BankTypeController) CreateOrList(w http.ResponseWriter, r *http.Request)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (c BankTypeController) Update(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/bank-types/")
+	if id == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Format      string `json:"format"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if body.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+
+	updates := map[string]interface{}{
+		"name":        body.Name,
+		"description": body.Description,
+		"format":      body.Format,
+	}
+
+	if err := c.DB.Model(&models.BankType{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "id": id})
 }

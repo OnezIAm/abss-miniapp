@@ -10,20 +10,21 @@ import (
 )
 
 type BankEntry struct {
-	ID              string         `json:"id" gorm:"primaryKey;type:varchar(64)"`
-	TransactionDate time.Time      `json:"transactionDate" gorm:"type:datetime;not null"`
-	Description     string         `json:"description" gorm:"type:text;not null"`
-	Branch          string         `json:"branch" gorm:"type:varchar(32);not null"`
-	Amount          float64        `json:"amount" gorm:"type:decimal(18,2);not null"`
-	AmountType      string         `json:"amountType" gorm:"type:varchar(2);not null"`
-	Balance         float64        `json:"balance" gorm:"type:decimal(18,2);not null"`
-	BankCode        string         `json:"bankCode" gorm:"type:varchar(20);not null;default:'UNKNOWN'"`
-	Fingerprint     string         `json:"fingerprint" gorm:"type:varchar(64);uniqueIndex"`
-	AttachedCount   int            `json:"attachedCount" gorm:"-"`
-	MatchedTotal    float64        `json:"matchedTotal" gorm:"-"`
-	Delta           float64        `json:"delta" gorm:"-"`
+	ID               string                    `json:"id" gorm:"primaryKey;type:varchar(64)"`
+	TransactionDate  time.Time                 `json:"transactionDate" gorm:"type:datetime;not null"`
+	Description      string                    `json:"description" gorm:"type:text;not null"`
+	Branch           string                    `json:"branch" gorm:"type:varchar(32);not null"`
+	Amount           float64                   `json:"amount" gorm:"type:decimal(18,2);not null"`
+	AmountType       string                    `json:"amountType" gorm:"type:varchar(2);not null"`
+	Balance          float64                   `json:"balance" gorm:"type:decimal(18,2);not null"`
+	BankCode         string                    `json:"bankCode" gorm:"type:varchar(20);not null;default:'UNKNOWN'"`
+	IsFinalized      bool                      `json:"isFinalized" gorm:"type:boolean;default:false"`
+	Fingerprint      string                    `json:"fingerprint" gorm:"type:varchar(64);uniqueIndex"`
+	AttachedCount    int                       `json:"attachedCount" gorm:"-"`
+	MatchedTotal     float64                   `json:"matchedTotal" gorm:"-"`
+	Delta            float64                   `json:"delta" gorm:"-"`
 	AttachedInvoices []BankEntryInvoiceSummary `json:"attachedInvoices,omitempty" gorm:"-"`
-	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
+	DeletedAt        gorm.DeletedAt            `json:"-" gorm:"index"`
 }
 
 type BankEntryInvoiceSummary struct {

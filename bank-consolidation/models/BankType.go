@@ -7,5 +7,6 @@ type BankType struct {
 	Name        string         `json:"name" gorm:"type:varchar(100);not null;uniqueIndex"`
 	Code        string         `json:"code" gorm:"type:varchar(20);not null;uniqueIndex"`
 	Description string         `json:"description" gorm:"type:text"`
+	Format      string         `json:"format" gorm:"type:varchar(50);default:'GENERIC'"`
 	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }

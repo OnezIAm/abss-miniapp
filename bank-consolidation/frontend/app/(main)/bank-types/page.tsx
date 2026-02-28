@@ -7,6 +7,7 @@ import { Button } from 'primereact/button';
 import { Dialog } from 'primereact/dialog';
 import { InputText } from 'primereact/inputtext';
 import { InputTextarea } from 'primereact/inputtextarea';
+import { Dropdown } from 'primereact/dropdown';
 import { Toast } from 'primereact/toast';
 import { Toolbar } from 'primereact/toolbar';
 import { BankTypeService } from '@/demo/service/BankTypeService';
@@ -14,9 +15,15 @@ import { BankTypeService } from '@/demo/service/BankTypeService';
 const BankTypesPage = () => {
     const [bankTypes, setBankTypes] = useState([]);
     const [bankTypeDialog, setBankTypeDialog] = useState(false);
-    const [bankType, setBankType] = useState({ name: '', code: '', description: '' });
+    const [bankType, setBankType] = useState({ id: '', name: '', code: '', description: '', format: 'GENERIC' });
     const [submitted, setSubmitted] = useState(false);
     const toast = useRef<Toast>(null);
+
+    const formatOptions = [
+        { label: 'Generic', value: 'GENERIC' },
+        { label: 'BCA', value: 'BCA' },
+        { label: 'Danamon', value: 'DANAMON' }
+    ];
 
     useEffect(() => {
         loadBankTypes();
@@ -27,8 +34,13 @@ const BankTypesPage = () => {
     };
 
     const openNew = () => {
-        setBankType({ name: '', code: '', description: '' });
+        setBankType({ id: '', name: '', code: '', description: '', format: 'GENERIC' });
         setSubmitted(false);
+        setBankTypeDialog(true);
+    };
+
+    const editBankType = (bankType: any) => {
+        setBankType({ ...bankType, format: bankType.format || 'GENERIC' });
         setBankTypeDialog(true);
     };
 
@@ -42,11 +54,16 @@ const BankTypesPage = () => {
 
         if (bankType.name.trim() && bankType.code.trim()) {
             try {
-                await BankTypeService.createBankType(bankType);
-                toast.current?.show({ severity: 'success', summary: 'Successful', detail: 'Bank Type Created', life: 3000 });
+                if (bankType.id) {
+                    await BankTypeService.updateBankType(bankType.id, bankType);
+                    toast.current?.show({ severity: 'success', summary: 'Successful', detail: 'Bank Type Updated', life: 3000 });
+                } else {
+                    await BankTypeService.createBankType(bankType);
+                    toast.current?.show({ severity: 'success', summary: 'Successful', detail: 'Bank Type Created', life: 3000 });
+                }
                 loadBankTypes();
                 setBankTypeDialog(false);
-                setBankType({ name: '', code: '', description: '' });
+                setBankType({ id: '', name: '', code: '', description: '', format: 'GENERIC' });
             } catch (error: any) {
                 toast.current?.show({ severity: 'error', summary: 'Error', detail: error.message, life: 3000 });
             }
@@ -58,12 +75,24 @@ const BankTypesPage = () => {
         setBankType((prev) => ({ ...prev, [name]: val }));
     };
 
+    const onFormatChange = (e: any) => {
+        setBankType((prev) => ({ ...prev, format: e.value }));
+    };
+
     const leftToolbarTemplate = () => {
         return (
             <React.Fragment>
                 <div className="my-2">
                     <Button label="New" icon="pi pi-plus" severity="success" className="mr-2" onClick={openNew} />
                 </div>
+            </React.Fragment>
+        );
+    };
+
+    const actionBodyTemplate = (rowData: any) => {
+        return (
+            <React.Fragment>
+                <Button icon="pi pi-pencil" rounded outlined className="mr-2" onClick={() => editBankType(rowData)} />
             </React.Fragment>
         );
     };
@@ -88,7 +117,9 @@ const BankTypesPage = () => {
                         header="Bank Types" emptyMessage="No bank types found.">
                         <Column field="code" header="Code" sortable style={{ minWidth: '10rem' }}></Column>
                         <Column field="name" header="Name" sortable style={{ minWidth: '12rem' }}></Column>
+                        <Column field="format" header="Format" sortable style={{ minWidth: '10rem' }}></Column>
                         <Column field="description" header="Description" sortable style={{ minWidth: '16rem' }}></Column>
+                        <Column body={actionBodyTemplate} exportable={false} style={{ minWidth: '8rem' }}></Column>
                     </DataTable>
 
                     <Dialog visible={bankTypeDialog} style={{ width: '450px' }} header="Bank Type Details" modal className="p-fluid" footer={bankTypeDialogFooter} onHide={hideDialog}>
@@ -101,6 +132,10 @@ const BankTypesPage = () => {
                             <label htmlFor="name">Name</label>
                             <InputText id="name" value={bankType.name} onChange={(e) => onInputChange(e, 'name')} required className={submitted && !bankType.name ? 'p-invalid' : ''} />
                             {submitted && !bankType.name && <small className="p-invalid">Name is required.</small>}
+                        </div>
+                        <div className="field">
+                            <label htmlFor="format">Format</label>
+                            <Dropdown id="format" value={bankType.format} options={formatOptions} onChange={onFormatChange} placeholder="Select a Format" />
                         </div>
                         <div className="field">
                             <label htmlFor="description">Description</label>

@@ -99,96 +99,81 @@ func (c BankEntryController) CreateOrList(w http.ResponseWriter, r *http.Request
 			Select("bank_entries.*, COALESCE(st.attached_count,0) AS attached_count, COALESCE(st.matched_total,0) AS matched_total").
 			Joins("LEFT JOIN (SELECT bank_entry_id, COUNT(1) AS attached_count, COALESCE(SUM(matched_amount),0) AS matched_total FROM bank_entry_invoices GROUP BY bank_entry_id) st ON st.bank_entry_id = bank_entries.id")
 
-		bankCode := strings.TrimSpace(q.Get("bankCode"))
-		if bankCode == "" {
-			http.Error(w, "bankCode is required", http.StatusBadRequest)
-			return
+		if start := q.Get("startDate"); start != "" {
+			if t, err := parseDate(start); err == nil {
+				db = db.Where("bank_entries.transaction_date >= ?", t)
+			}
+		}
+		if end := q.Get("endDate"); end != "" {
+			if t, err := parseDate(end); err == nil {
+				// make it end of day
+				t = t.Add(24 * time.Hour).Add(-1 * time.Second)
+				db = db.Where("bank_entries.transaction_date <= ?", t)
+			}
+		}
+		if bank := q.Get("bankCode"); bank != "" {
+			db = db.Where("bank_entries.bank_code = ?", bank)
+		}
+		if v := q.Get("reconciledOnly"); v == "1" || strings.EqualFold(v, "true") {
+			db = db.Where("COALESCE(st.attached_count,0) > 0")
+		}
+
+		// Handle finalized filter
+		// By default, only show non-finalized entries unless specific query param says otherwise
+		// However, for export we might want all or just finalized.
+		// Let's assume the main list view should hide finalized entries.
+		if showFinalized := q.Get("showFinalized"); showFinalized == "true" {
+			// Show only finalized
+			db = db.Where("bank_entries.is_finalized = ?", true)
+		} else if showFinalized == "all" {
+			// Show all (both finalized and not)
 		} else {
-			db = db.Where("bank_code = ?", bankCode)
+			// Default: Show only NOT finalized
+			db = db.Where("bank_entries.is_finalized = ? OR bank_entries.is_finalized IS NULL", false)
 		}
 
-		// Optional amountType filter (CR/DB)
-		amountType := strings.ToUpper(strings.TrimSpace(q.Get("amountType")))
-		if amountType == "CR" || amountType == "DB" {
-			db = db.Where("amount_type = ?", amountType)
-		}
-
-		// Optional month filter: YYYY-MM (inclusive start, exclusive next month)
-		monthKey := strings.TrimSpace(q.Get("month"))
-		var monthStart, monthEnd time.Time
-		if monthKey != "" {
-			parts := strings.Split(monthKey, "-")
-			if len(parts) == 2 {
-				y, yErr := strconv.Atoi(parts[0])
-				m, mErr := strconv.Atoi(parts[1])
-				if yErr == nil && mErr == nil && m >= 1 && m <= 12 {
-					monthStart = time.Date(y, time.Month(m), 1, 0, 0, 0, 0, time.UTC)
-					monthEnd = monthStart.AddDate(0, 1, 0)
-					db = db.Where("transaction_date >= ? AND transaction_date < ?", monthStart, monthEnd)
-				}
-			}
-		}
-
-		// Pagination: limit & offset
-		limit := 0
-		offset := 0
-		if limStr := strings.TrimSpace(q.Get("limit")); limStr != "" {
-			if lim, err := strconv.Atoi(limStr); err == nil && lim > 0 {
-				limit = lim
-				db = db.Limit(limit)
-			}
-		}
-		if offStr := strings.TrimSpace(q.Get("offset")); offStr != "" {
-			if off, err := strconv.Atoi(offStr); err == nil && off >= 0 {
-				offset = off
-				db = db.Offset(offset)
-			}
-		}
-
-		// Total count with same filters (without joins/pagination)
-		countDB := c.DB.Model(&models.BankEntry{}).Where("bank_code = ?", bankCode)
-		if amountType == "CR" || amountType == "DB" {
-			countDB = countDB.Where("amount_type = ?", amountType)
-		}
-		if !monthStart.IsZero() && !monthEnd.IsZero() {
-			countDB = countDB.Where("transaction_date >= ? AND transaction_date < ?", monthStart, monthEnd)
-		}
-		var total int64
-		if err := countDB.Count(&total).Error; err != nil {
+		var entries []bankEntryRow
+		if err := db.Find(&entries).Error; err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		var rows []bankEntryRow
-		if err := db.Order("transaction_date DESC").Scan(&rows).Error; err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		// Convert to response
+		resp := make([]models.BankEntry, len(entries))
+		for i, e := range entries {
+			resp[i] = e.BankEntry
+			resp[i].AttachedCount = e.AttachedCount
+			resp[i].MatchedTotal = e.MatchedTotal
+			resp[i].Delta = math.Abs(resp[i].Amount) - e.MatchedTotal
 		}
-		list := make([]models.BankEntry, len(rows))
-		for i, r := range rows {
-			e := r.BankEntry
-			e.AttachedCount = r.AttachedCount
-			e.MatchedTotal = r.MatchedTotal
-			e.Delta = math.Abs(e.Amount) - e.MatchedTotal
-			list[i] = e
-		}
+
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": list,
-			"pagination": map[string]any{
-				"total":  total,
-				"limit":  limit,
-				"offset": offset,
-				"hasNext": func() bool {
-					// if limit is zero, treat as no paging
-					if limit <= 0 {
-						return false
-					}
-					return int64(offset+limit) < total
-				}(),
-			},
-		})
-	default:
+		json.NewEncoder(w).Encode(resp)
+
+	case http.MethodPut:
+		// Handle Finalize Action
+		if r.URL.Path == "/api/v1/bank-entries/finalize" {
+			var body struct {
+				IDs []string `json:"ids"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if len(body.IDs) == 0 {
+				http.Error(w, "ids are required", http.StatusBadRequest)
+				return
+			}
+
+			if err := c.DB.Model(&models.BankEntry{}).Where("id IN ?", body.IDs).Update("is_finalized", true).Error; err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
+		}
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
@@ -665,6 +650,10 @@ func (c BankEntryController) ExportReconciled(w http.ResponseWriter, r *http.Req
 		if t, err := parseDate(endDateStr); err == nil {
 			db = db.Where("bank_entries.transaction_date <= ?", t)
 		}
+	}
+
+	if showFinalized := r.URL.Query().Get("showFinalized"); showFinalized == "true" {
+		db = db.Where("bank_entries.is_finalized = ?", true)
 	}
 
 	if err := db.Order("bank_entries.transaction_date").Scan(&rows).Error; err != nil {

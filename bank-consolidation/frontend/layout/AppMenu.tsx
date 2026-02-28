@@ -19,7 +19,8 @@ const AppMenu = () => {
             label: 'Banking',
             items: [
                 { label: 'Overview', icon: 'pi pi-fw pi-wallet', to: '/banking' },
-                { label: 'Bank Types', icon: 'pi pi-fw pi-building', to: '/bank-types' }
+                { label: 'Bank Types', icon: 'pi pi-fw pi-building', to: '/bank-types' },
+                { label: 'Finalized', icon: 'pi pi-fw pi-check-square', to: '/banking/finalized' }
             ]
         },
         {

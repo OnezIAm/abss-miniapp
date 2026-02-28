@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -13,11 +14,12 @@ import (
 )
 
 func initDB(dsn string) *gorm.DB {
-	// Ensure data directory exists
-	if err := os.MkdirAll("data", 0755); err != nil {
+	dataDir := resolveDataDir()
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("create data dir: %v", err)
 	}
-	db, err := gorm.Open(sqlite.Open("data/bank.db"), &gorm.Config{})
+	dbPath := filepath.Join(dataDir, "bank.db")
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
@@ -33,12 +35,50 @@ func initDB(dsn string) *gorm.DB {
 	if err := migrate(sqlDB); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
+	if err := seedDefaultBanks(db); err != nil {
+		log.Printf("seed banks: %v", err)
+	}
 	// if os.Getenv("SEED_DEV") == "1" {
 	// 	if err := seedDevData(sqlDB); err != nil {
 	// 		log.Fatalf("seed: %v", err)
 	// 	}
 	// }
 	return db
+}
+
+func resolveDataDir() string {
+	if dir := os.Getenv("APP_DATA_DIR"); dir != "" {
+		return dir
+	}
+
+	if path := os.Getenv("SQLITE_PATH"); path != "" {
+		return filepath.Dir(path)
+	}
+
+	if cwd, err := os.Getwd(); err == nil {
+		if fileExists(filepath.Join(cwd, "go.mod")) {
+			return filepath.Join(cwd, "data")
+		}
+	}
+
+	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+		return filepath.Join(dir, "bank-consolidation")
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".bank-consolidation")
+	}
+
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		return filepath.Join(filepath.Dir(exe), "data")
+	}
+
+	return "data"
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func migrate(db *sql.DB) error {
@@ -116,7 +156,11 @@ func migrate(db *sql.DB) error {
 			amount DECIMAL(18,2) NOT NULL,
 			amount_type VARCHAR(2) NOT NULL,
 			balance DECIMAL(18,2) NOT NULL,
-			deleted_at DATETIME NULL
+			bank_code VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN',
+			is_finalized BOOLEAN DEFAULT FALSE,
+			fingerprint VARCHAR(64) NULL,
+			deleted_at DATETIME NULL,
+			UNIQUE(fingerprint)
 		)`,
 		`CREATE TABLE IF NOT EXISTS bank_entry_invoices (
 			bank_entry_id VARCHAR(64) NOT NULL,
@@ -143,6 +187,11 @@ func migrate(db *sql.DB) error {
 	if !columnExists(db, "bank_entries", "fingerprint") {
 		if _, err := db.Exec("ALTER TABLE bank_entries ADD COLUMN fingerprint VARCHAR(64) NULL"); err != nil {
 			return fmt.Errorf("add column fingerprint: %w", err)
+		}
+	}
+	if !columnExists(db, "bank_entries", "is_finalized") {
+		if _, err := db.Exec("ALTER TABLE bank_entries ADD COLUMN is_finalized BOOLEAN DEFAULT FALSE"); err != nil {
+			return fmt.Errorf("add column is_finalized: %w", err)
 		}
 	}
 

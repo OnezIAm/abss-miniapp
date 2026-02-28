@@ -14,7 +14,7 @@ export const BankTypeService = {
         return res.json();
     },
 
-    async createBankType(bankType: { name: string; code: string; description: string }) {
+    async createBankType(bankType: { name: string; code: string; description: string; format?: string }) {
         const baseUrl = typeof window !== 'undefined' && window.location.port === '3000' 
             ? 'http://localhost:8080' 
             : '';
@@ -29,6 +29,25 @@ export const BankTypeService = {
         if (!res.ok) {
             const err = await res.text();
             throw new Error(err || 'Failed to create bank type');
+        }
+        return res.json();
+    },
+
+    async updateBankType(id: string, bankType: { name: string; description: string; format?: string }) {
+        const baseUrl = typeof window !== 'undefined' && window.location.port === '3000' 
+            ? 'http://localhost:8080' 
+            : '';
+
+        const res = await fetch(`${baseUrl}/api/v1/bank-types/${id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(bankType)
+        });
+        if (!res.ok) {
+            const err = await res.text();
+            throw new Error(err || 'Failed to update bank type');
         }
         return res.json();
     }

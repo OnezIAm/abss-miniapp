@@ -237,6 +237,22 @@ func (c InvoiceController) CreateOrList(w http.ResponseWriter, r *http.Request) 
 	case http.MethodGet:
 		q := r.URL.Query()
 		db := c.DB.Model(&models.InvoiceHeader{})
+		includeIDs := make([]string, 0)
+		if inc := strings.TrimSpace(q.Get("includeIds")); inc != "" {
+			parts := strings.Split(inc, ",")
+			seen := make(map[string]struct{}, len(parts))
+			for _, p := range parts {
+				id := strings.TrimSpace(p)
+				if id == "" {
+					continue
+				}
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				includeIDs = append(includeIDs, id)
+			}
+		}
 
 		if v := q.Get("status"); v != "" {
 			db = db.Where("status = ?", v)
@@ -264,13 +280,8 @@ func (c InvoiceController) CreateOrList(w http.ResponseWriter, r *http.Request) 
 		if v := q.Get("excludeFullyPaid"); v == "1" || strings.EqualFold(v, "true") {
 			condition := fmt.Sprintf("total_amount > %s", paidSubquery)
 
-			if inc := q.Get("includeIds"); inc != "" {
-				ids := strings.Split(inc, ",")
-				if len(ids) > 0 {
-					db = db.Where(fmt.Sprintf("(%s OR id IN ?)", condition), ids)
-				} else {
-					db = db.Where(condition)
-				}
+			if len(includeIDs) > 0 {
+				db = db.Where(fmt.Sprintf("(%s OR id IN ?)", condition), includeIDs)
 			} else {
 				db = db.Where(condition)
 			}
@@ -311,6 +322,28 @@ func (c InvoiceController) CreateOrList(w http.ResponseWriter, r *http.Request) 
 		if err := db.Select("*, " + paidSubquery + " as paid_amount").Scan(&results).Error; err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+
+		if len(includeIDs) > 0 {
+			existing := make(map[string]struct{}, len(results))
+			for _, r := range results {
+				existing[fmt.Sprint(r.InvoiceHeaderID)] = struct{}{}
+			}
+
+			var extras []Result
+			if err := c.DB.Model(&models.InvoiceHeader{}).
+				Where("id IN ?", includeIDs).
+				Select("*, " + paidSubquery + " as paid_amount").
+				Scan(&extras).Error; err == nil {
+				for _, ex := range extras {
+					id := fmt.Sprint(ex.InvoiceHeaderID)
+					if _, ok := existing[id]; ok {
+						continue
+					}
+					existing[id] = struct{}{}
+					results = append(results, ex)
+				}
+			}
 		}
 
 		list := make([]map[string]any, 0)

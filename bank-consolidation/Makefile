@@ -19,7 +19,12 @@ down:
 	@echo "Done!"
 
 
-build-bank-consolidation:
+build-bank-consolidation: frontend-build
 	@echo "Building bank-consolidation image..."
 	cd ../bank-consolidation && env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BANK_BINARY} .
 	@echo "Done!"
+
+frontend-build:
+	@echo "Building frontend..."
+	cd frontend && npm install && npm run build
+	@echo "Frontend built!"

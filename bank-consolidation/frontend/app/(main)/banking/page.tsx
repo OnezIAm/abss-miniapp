@@ -1,5 +1,6 @@
 "use client";
 import React, { useMemo, useState, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { DataTable } from "primereact/datatable";
 import { Column } from "primereact/column";
 import { Button } from "primereact/button";
@@ -29,6 +30,7 @@ interface BankModel {
   code: string;
   name: string;
   description: string;
+  format?: string;
 }
 
 type DataSource = "csv" | "db";
@@ -59,6 +61,7 @@ type BankEntry = {
 };
 
 const BankingPage = () => {
+  const router = useRouter();
   const toast = useRef<Toast | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [directionFilter, setDirectionFilter] = useState<"all" | "in" | "out">(
@@ -96,6 +99,10 @@ const BankingPage = () => {
     amount: 0,
     type: "CR",
   });
+
+  // Finalize
+  const [selectedDbEntries, setSelectedDbEntries] = useState<any[]>([]);
+  const [finalizeLoading, setFinalizeLoading] = useState(false);
 
   React.useEffect(() => {
     BankTypeService.getBankTypes()
@@ -255,11 +262,18 @@ const BankingPage = () => {
   };
 
   const parseByBank = (selectedBank: string, rows: string[][]): Transaction[] => {
-    if (selectedBank === "BCA") {
+    // Find the bank object to get its format
+    const bankObj = bankList.find((b) => b.code === selectedBank);
+    // Default to GENERIC if not found or no format specified
+    const format = bankObj?.format || "GENERIC";
+
+    if (format === "BCA") {
       const bca = parseStatementRows(rows);
       if (bca.length > 0) return bca;
       return parseGenericRows(rows);
     }
+    
+    // For DANAMON or GENERIC, use generic parser
     return parseGenericRows(rows);
   };
 
@@ -278,7 +292,7 @@ const BankingPage = () => {
       };
       reader.readAsText(file);
     },
-    [bank]
+    [bank, bankList]
   );
 
   const totalIn = useMemo(
@@ -480,7 +494,10 @@ const BankingPage = () => {
       amount: e.amountType === "CR" ? e.amount : -e.amount,
       direction: e.amountType === "CR" ? "in" : "out",
       // Use delta as balance (remaining to reconcile)
-      balance: typeof e.delta === "number" ? e.delta : e.amount - (e.matchedTotal || 0),
+      balance:
+        typeof e.delta === "number"
+          ? e.delta
+          : Math.abs(e.amount) - (e.matchedTotal || 0),
       status: "posted",
       bankCode: e.bankCode,
       attachedCount: e.attachedCount,
@@ -488,7 +505,7 @@ const BankingPage = () => {
       delta: e.delta,
       attachedInvoices: e.attachedInvoices,
     }));
-  }, [dbEntries, directionFilter, selectedMonthKey]);
+  }, [dbEntries, bank]);
 
   const tableData =
     dataSource === "csv"
@@ -598,8 +615,10 @@ const BankingPage = () => {
       const alloc = allocations[it.id];
       if (typeof alloc === 'number') return acc + alloc;
       
-      const val = typeof it.totalAmount === "number" ? it.totalAmount : Number(it.totalAmount || 0);
-      return acc + (isNaN(val) ? 0 : val);
+      const total = typeof it.totalAmount === "number" ? it.totalAmount : Number(it.totalAmount || 0);
+      const paid = typeof it.paidAmount === "number" ? it.paidAmount : Number(it.paidAmount || 0);
+      const remaining = total - paid;
+      return acc + (isNaN(remaining) ? 0 : Math.max(remaining, 0));
     }, 0);
   }, [invoiceSelection, allocations]);
 
@@ -647,7 +666,13 @@ const BankingPage = () => {
       const payload = {
         invoices: invoices.map((inv) => ({
           id: inv.id,
-          amount: allocations[inv.id] !== undefined ? allocations[inv.id] : inv.totalAmount, 
+          amount:
+            allocations[inv.id] !== undefined
+              ? allocations[inv.id]
+              : Math.max(
+                  (Number(inv.totalAmount) || 0) - (Number(inv.paidAmount) || 0),
+                  0
+                ),
         })),
         note,
         mode: "replace",
@@ -782,6 +807,28 @@ const BankingPage = () => {
     } catch (e) {
       console.error("Export error", e);
       toast.current?.show({ severity: "error", summary: "Error", detail: "Export failed" });
+    }
+  };
+
+  const handleFinalize = async () => {
+    if (!selectedDbEntries.length) return;
+    setFinalizeLoading(true);
+    try {
+      const ids = selectedDbEntries.map((e: any) => e.entryId).filter(Boolean);
+      // Assuming an endpoint for finalizing/updating status exists
+      await api.put("/bank-entries/finalize", { ids });
+      toast.current?.show({
+        severity: "success",
+        summary: "Finalized",
+        detail: `${ids.length} entries finalized`,
+      });
+      setSelectedDbEntries([]);
+      refreshDatabase(dbOffset, rowsPerPage);
+    } catch (e) {
+      console.error(e);
+      toast.current?.show({ severity: "error", summary: "Error", detail: "Failed to finalize" });
+    } finally {
+      setFinalizeLoading(false);
     }
   };
 
@@ -1046,8 +1093,28 @@ const BankingPage = () => {
               </div>
             </div>
           </div>
+          {dataSource === "db" && (
+            <div className="flex justify-content-end mb-3 gap-2">
+              <Button
+                label="View Finalized"
+                icon="pi pi-list"
+                severity="info"
+                onClick={() => router.push("/banking/finalized")}
+              />
+              <Button
+                label="Finalize Selected"
+                icon="pi pi-check-square"
+                severity="success"
+                onClick={handleFinalize}
+                disabled={!selectedDbEntries.length || finalizeLoading}
+                loading={finalizeLoading}
+              />
+            </div>
+          )}
           <DataTable
             value={tableData}
+            selection={selectedDbEntries}
+            onSelectionChange={(e) => setSelectedDbEntries(e.value)}
             rows={rowsPerPage}
             rowsPerPageOptions={[5, 10, 20, 50]}
             paginator
@@ -1063,6 +1130,9 @@ const BankingPage = () => {
             responsiveLayout="scroll"
             dataKey="id"
           >
+            {dataSource === "db" && (
+              <Column selectionMode="multiple" headerStyle={{ width: "3rem" }} />
+            )}
             <Column
               field="date"
               header="Date"

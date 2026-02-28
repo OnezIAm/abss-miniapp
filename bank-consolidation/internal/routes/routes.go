@@ -2,10 +2,8 @@ package routes
 
 import (
 	"bank-consolidation/internal/controllers"
-	"encoding/json"
+	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/gin-contrib/cors"
@@ -13,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func Register(db *gorm.DB) *gin.Engine {
+func Register(db *gorm.DB, contentFS fs.FS) *gin.Engine {
 	inv := controllers.InvoiceController{DB: db}
 	txc := controllers.TransactionController{DB: db}
 	cat := controllers.CategoryController{DB: db}
@@ -22,15 +20,24 @@ func Register(db *gorm.DB) *gin.Engine {
 
 	r := gin.Default()
 
-	// Serve Next.js static files
-	r.Static("/_next", "./frontend/out/_next")
-	r.Static("/themes", "./frontend/out/themes")
-	r.Static("/demo", "./frontend/out/demo")
-	r.StaticFile("/favicon.ico", "./frontend/out/favicon.ico")
+	// Serve Next.js static files from embedded FS
+	if sub, err := fs.Sub(contentFS, "_next"); err == nil {
+		r.StaticFS("/_next", http.FS(sub))
+	}
+	if sub, err := fs.Sub(contentFS, "themes"); err == nil {
+		r.StaticFS("/themes", http.FS(sub))
+	}
+	if sub, err := fs.Sub(contentFS, "demo"); err == nil {
+		r.StaticFS("/demo", http.FS(sub))
+	}
+
+	r.GET("/favicon.ico", func(c *gin.Context) {
+		c.FileFromFS("favicon.ico", http.FS(contentFS))
+	})
 
 	// Serve index.html for root
 	r.GET("/", func(c *gin.Context) {
-		c.File("./frontend/out/index.html")
+		c.Redirect(http.StatusFound, "/banking")
 	})
 
 	// Fallback for other routes (HTML files or 404)
@@ -42,30 +49,42 @@ func Register(db *gorm.DB) *gin.Engine {
 			return
 		}
 
-		cleanPath := filepath.Clean(path)
-		fullPath := filepath.Join("./frontend/out", cleanPath)
+		cleanPath := strings.TrimPrefix(path, "/")
+		if cleanPath == "" {
+			cleanPath = "index.html"
+		}
+
+		// Helper to check and serve file
+		serveIfFile := func(p string) bool {
+			f, err := contentFS.Open(p)
+			if err != nil {
+				return false
+			}
+			defer f.Close()
+			info, err := f.Stat()
+			if err != nil || info.IsDir() {
+				return false
+			}
+			c.FileFromFS(p, http.FS(contentFS))
+			return true
+		}
 
 		// Try exact match (e.g. /robots.txt)
-		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
-			c.File(fullPath)
+		if serveIfFile(cleanPath) {
 			return
 		}
 
 		// Try .html extension (e.g. /banking -> /banking.html)
-		htmlPath := fullPath + ".html"
-		if info, err := os.Stat(htmlPath); err == nil && !info.IsDir() {
-			c.File(htmlPath)
+		if serveIfFile(cleanPath + ".html") {
 			return
 		}
 
 		// Try index.html in directory
-		indexPath := filepath.Join(fullPath, "index.html")
-		if info, err := os.Stat(indexPath); err == nil && !info.IsDir() {
-			c.File(indexPath)
+		if serveIfFile(cleanPath + "/index.html") {
 			return
 		}
 
-		c.File("./frontend/out/404.html")
+		c.FileFromFS("404.html", http.FS(contentFS))
 	})
 
 	r.Use(cors.New(cors.Config{
@@ -96,21 +115,21 @@ func Register(db *gorm.DB) *gin.Engine {
 	api.POST("/categories", func(c *gin.Context) { cat.CreateOrList(c.Writer, c.Request) })
 	api.GET("/categories", func(c *gin.Context) { cat.CreateOrList(c.Writer, c.Request) })
 
-	// Bank entries CRUD
-	api.POST("/bank-entries", func(c *gin.Context) { be.CreateOrList(c.Writer, c.Request) })
-	api.POST("/bank-entries/seed", func(c *gin.Context) { be.GenerateSample(c.Writer, c.Request) })
-
-	// Bank types CRUD
 	api.POST("/bank-types", func(c *gin.Context) { bt.CreateOrList(c.Writer, c.Request) })
 	api.GET("/bank-types", func(c *gin.Context) { bt.CreateOrList(c.Writer, c.Request) })
-	api.POST("/bank-entries/bulk", func(c *gin.Context) { be.BulkCreate(c.Writer, c.Request) })
-	api.POST("/bank-entries/upload", func(c *gin.Context) { be.UploadCSV(c.Writer, c.Request) })
-	api.GET("/bank-entries/export/reconciled", func(c *gin.Context) { be.ExportReconciled(c.Writer, c.Request) })
-	api.GET("/bank-entries", func(c *gin.Context) { be.CreateOrList(c.Writer, c.Request) })
-	api.GET("/bank-entries/:id", func(c *gin.Context) {
-		c.Request.URL.Path = "/bank-entries/" + c.Param("id")
-		be.GetByID(c.Writer, c.Request)
+	api.PUT("/bank-types/:id", func(c *gin.Context) {
+		c.Request.URL.Path = "/bank-types/" + c.Param("id")
+		bt.Update(c.Writer, c.Request)
 	})
+
+	// Bank entries CRUD
+	api.GET("/bank-entries", func(c *gin.Context) { be.CreateOrList(c.Writer, c.Request) })
+	api.POST("/bank-entries", func(c *gin.Context) { be.CreateOrList(c.Writer, c.Request) })
+	api.PUT("/bank-entries/finalize", func(c *gin.Context) {
+		c.Request.URL.Path = "/api/v1/bank-entries/finalize"
+		be.CreateOrList(c.Writer, c.Request)
+	})
+
 	api.PUT("/bank-entries/:id", func(c *gin.Context) {
 		c.Request.URL.Path = "/bank-entries/" + c.Param("id")
 		be.Update(c.Writer, c.Request)
@@ -119,6 +138,11 @@ func Register(db *gorm.DB) *gin.Engine {
 		c.Request.URL.Path = "/bank-entries/" + c.Param("id")
 		be.Delete(c.Writer, c.Request)
 	})
+
+	api.POST("/bank-entries/bulk", func(c *gin.Context) { be.BulkCreate(c.Writer, c.Request) })
+	api.POST("/bank-entries/seed", func(c *gin.Context) { be.GenerateSample(c.Writer, c.Request) })
+	api.POST("/bank-entries/upload", func(c *gin.Context) { be.UploadCSV(c.Writer, c.Request) })
+
 	api.POST("/bank-entries/:id/reconcile", func(c *gin.Context) {
 		c.Request.URL.Path = "/bank-entries/" + c.Param("id") + "/reconcile"
 		be.Reconcile(c.Writer, c.Request)
@@ -128,56 +152,8 @@ func Register(db *gorm.DB) *gin.Engine {
 		be.ListAttachedInvoices(c.Writer, c.Request)
 	})
 
-	api.GET("/reports/invoices", func(c *gin.Context) {
-		var list []map[string]any
-		if err := db.Table("v_invoice_summary").Order("invoice_date DESC").Find(&list).Error; err != nil {
-			http.Error(c.Writer, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Transform keys to match original response if needed. GORM map scan uses DB column names (snake_case usually).
-		// Original response used camelCase.
-		// Let's do a manual mapping to ensure API compatibility.
-		var responseList []map[string]any
-		for _, item := range list {
-			responseList = append(responseList, map[string]any{
-				"headerId":     item["header_id"],
-				"invoiceNo":    item["invoice_no"],
-				"invoiceDate":  item["invoice_date"],
-				"customerId":   item["customer_id"],
-				"customerName": item["customer_name"],
-				"status":       item["status"],
-				"totalAmount":  item["total_amount"],
-				"totalTax":     item["total_tax"],
-				"companyCode":  item["company_code"],
-			})
-		}
-
-		c.Header("Content-Type", "application/json")
-		_ = json.NewEncoder(c.Writer).Encode(responseList)
-	})
-
-	api.GET("/reports/transactions/categories", func(c *gin.Context) {
-		var list []map[string]any
-		if err := db.Table("v_transaction_category_summary").Order("transaction_id").Find(&list).Error; err != nil {
-			http.Error(c.Writer, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		var responseList []map[string]any
-		for _, item := range list {
-			responseList = append(responseList, map[string]any{
-				"transactionId":    item["transaction_id"],
-				"importSource":     item["import_source"],
-				"validationStatus": item["validation_status"],
-				"categoryId":       item["category_id"],
-				"categoryType":     item["category_type"],
-				"categoryName":     item["category_name"],
-			})
-		}
-
-		c.Header("Content-Type", "application/json")
-		_ = json.NewEncoder(c.Writer).Encode(responseList)
+	api.GET("/bank-entries/export/reconciled", func(c *gin.Context) {
+		be.ExportReconciled(c.Writer, c.Request)
 	})
 
 	return r

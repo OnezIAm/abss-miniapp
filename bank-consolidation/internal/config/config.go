@@ -28,7 +28,7 @@ func New() Config {
         DBHost: getenv("DB_HOST", "127.0.0.1"),
         DBPort: getenv("DB_PORT", "3306"),
         DBName: getenv("DB_NAME", "bank_consolidation"),
-        Addr:   getenv("ADDR", ":8080"),
+        Addr:   getenv("ADDR", ":8585"),
     }
 }
 
