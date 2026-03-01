@@ -6,6 +6,7 @@ import (
 	"embed"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 )
@@ -14,6 +15,11 @@ import (
 var frontendEmbed embed.FS
 
 func main() {
+	// Fix for missing MIME types on some systems (CSS/JS loading issues)
+	mime.AddExtensionType(".css", "text/css")
+	mime.AddExtensionType(".js", "application/javascript")
+	mime.AddExtensionType(".mjs", "application/javascript")
+
 	cfg := config.New()
 	db := initDB(cfg.MySQLDSN())
 

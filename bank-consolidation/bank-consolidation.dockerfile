@@ -2,7 +2,7 @@ FROM golang:1.24-alpine
 
 
 # Install dependencies
-RUN apk add --no-cache tzdata git
+RUN apk add --no-cache tzdata git mailcap
 ENV TZ=Asia/Jakarta
 
 WORKDIR /app

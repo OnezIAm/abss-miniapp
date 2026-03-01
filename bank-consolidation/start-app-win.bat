@@ -4,9 +4,13 @@ cd /d "%~dp0"
 :: Set the port to 8585 to match the frontend configuration
 set ADDR=:8585
 
+:: Ensure the app uses the local 'data' directory for the database (Portable Mode)
+set APP_DATA_DIR=%~dp0data
+
 echo ---------------------------------------------------
 echo Starting Bank Consolidation App...
 echo Backend Port: %ADDR%
+echo Data Directory: %APP_DATA_DIR%
 echo ---------------------------------------------------
 
 :: Start the backend in a separate window

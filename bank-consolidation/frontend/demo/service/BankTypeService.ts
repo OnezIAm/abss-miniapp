@@ -33,7 +33,7 @@ export const BankTypeService = {
         return res.json();
     },
 
-    async updateBankType(id: string, bankType: { name: string; description: string; format?: string }) {
+    async updateBankType(id: string, bankType: { name: string; code: string; description: string; format?: string }) {
         const baseUrl = typeof window !== 'undefined' && window.location.port === '3000' 
             ? 'http://localhost:8080' 
             : '';

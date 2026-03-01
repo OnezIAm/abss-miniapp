@@ -16,12 +16,14 @@ func seedDefaultBanks(db *gorm.DB) error {
 			Name:        "BCA",
 			Code:        "BCA",
 			Description: "Bank Central Asia",
+			Format:      "GENERIC",
 		},
 		{
 			ID:          fmt.Sprintf("BT-%d-DANAMON", time.Now().UnixNano()),
 			Name:        "Danamon",
 			Code:        "DANAMON",
 			Description: "Bank Danamon",
+			Format:      "GENERIC",
 		},
 	}
 
@@ -29,7 +31,7 @@ func seedDefaultBanks(db *gorm.DB) error {
 		// Use Upsert on Code
 		err := db.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "code"}},
-			DoUpdates: clause.AssignmentColumns([]string{"name", "description"}),
+			DoUpdates: clause.AssignmentColumns([]string{"name", "description", "format"}),
 		}).Create(&bank).Error
 		if err != nil {
 			return err

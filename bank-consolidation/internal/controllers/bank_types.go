@@ -83,6 +83,7 @@ func (c BankTypeController) Update(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		Name        string `json:"name"`
+		Code        string `json:"code"`
 		Description string `json:"description"`
 		Format      string `json:"format"`
 	}
@@ -96,8 +97,22 @@ func (c BankTypeController) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check for unique constraints on name and code (excluding current record)
+	var count int64
+	if err := c.DB.Model(&models.BankType{}).
+		Where("(name = ? OR code = ?) AND id != ?", body.Name, body.Code, id).
+		Count(&count).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if count > 0 {
+		http.Error(w, "Bank type with this name or code already exists", http.StatusConflict)
+		return
+	}
+
 	updates := map[string]interface{}{
 		"name":        body.Name,
+		"code":        body.Code,
 		"description": body.Description,
 		"format":      body.Format,
 	}

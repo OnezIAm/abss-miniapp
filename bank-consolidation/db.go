@@ -19,6 +19,7 @@ func initDB(dsn string) *gorm.DB {
 		log.Fatalf("create data dir: %v", err)
 	}
 	dbPath := filepath.Join(dataDir, "bank.db")
+	log.Printf("Using database at: %s", dbPath)
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("open db: %v", err)
@@ -98,6 +99,7 @@ func migrate(db *sql.DB) error {
 			name VARCHAR(100) NOT NULL,
 			code VARCHAR(20) NOT NULL,
 			description TEXT NULL,
+			format VARCHAR(50) DEFAULT 'GENERIC',
 			deleted_at DATETIME NULL,
 			UNIQUE(name),
 			UNIQUE(code)
@@ -179,6 +181,15 @@ func migrate(db *sql.DB) error {
 	}
 
 	// Add columns manually if they don't exist (compatibility for older SQLite)
+	if !columnExists(db, "bank_types", "format") {
+		log.Println("Adding 'format' column to bank_types table...")
+		if _, err := db.Exec("ALTER TABLE bank_types ADD COLUMN format VARCHAR(50) DEFAULT 'GENERIC'"); err != nil {
+			log.Printf("Failed to add 'format' column: %v", err)
+			// Don't fail hard, just log error, maybe column already exists or other issue
+		} else {
+			log.Println("Successfully added 'format' column to bank_types table")
+		}
+	}
 	if !columnExists(db, "bank_entries", "bank_code") {
 		if _, err := db.Exec("ALTER TABLE bank_entries ADD COLUMN bank_code VARCHAR(16) NOT NULL DEFAULT 'BRI'"); err != nil {
 			return fmt.Errorf("add column bank_code: %w", err)
