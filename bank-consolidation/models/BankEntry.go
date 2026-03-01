@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -53,23 +54,34 @@ func (b *BankEntry) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	s := strings.TrimSpace(aux.TransactionDate)
-	var t time.Time
-	var err error
-
-	if strings.Contains(s, "/") {
-		t, err = time.Parse("02/01/2006", s)
-	} else {
-		// try RFC3339 or date-only
-		t, err = time.Parse(time.RFC3339, s)
-		if err != nil {
-			t, err = time.Parse("2006-01-02", s)
-		}
-	}
-
+	t, err := ParseDate(aux.TransactionDate)
 	if err != nil {
-		return errors.New("unsupported date format")
+		return err
 	}
 	b.TransactionDate = t
 	return nil
+}
+
+func ParseDate(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, errors.New("date string is empty")
+	}
+
+	layouts := []string{
+		"2006-01-02",
+		"02/01/2006",
+		time.RFC3339,
+		"2006/01/02",
+		"02-01-2006",
+		"02 Jan 2006",
+	}
+
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("unsupported date format: %s", s)
 }

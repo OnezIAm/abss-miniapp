@@ -201,6 +201,7 @@ const BankingPage = () => {
     for (const r of dataRows) {
       if (r.length < 5) continue;
       const date = r[0];
+      if (!date || date.toUpperCase().includes("PEND")) continue;
       const description = r[1];
       const branch = r[2];
       const jumlah = r[3];
@@ -228,7 +229,14 @@ const BankingPage = () => {
     return txs;
   };
 
-  const isDate = (s: string) => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s.trim());
+  const isDate = (s: string) => {
+    const trimmed = s.trim();
+    return (
+      /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(trimmed) || // DD/MM/YYYY
+      /^\d{4}-\d{2}-\d{2}$/.test(trimmed) || // YYYY-MM-DD
+      /^\d{1,2}\s+[a-zA-Z]+\s+\d{4}$/.test(trimmed) // DD Mon YYYY
+    );
+  };
 
   const parseGenericRows = (rows: string[][]): Transaction[] => {
     const txs: Transaction[] = [];
@@ -261,19 +269,104 @@ const BankingPage = () => {
     return txs;
   };
 
+  const parseDanamonDate = (dateStr: string): string => {
+    // Input: "02 Feb 2026" -> Output: "02/02/2026"
+    if (!dateStr) return "";
+    const parts = dateStr.trim().split(" ");
+    if (parts.length !== 3) return dateStr;
+    
+    const day = parts[0];
+    const monthStr = parts[1].toLowerCase();
+    const year = parts[2];
+    
+    const months: Record<string, string> = {
+      jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+      jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+      // Indonesian months mapping just in case
+      januari: "01", februari: "02", maret: "03", april: "04", mei: "05", juni: "06",
+      juli: "07", agustus: "08", september: "09", oktober: "10", november: "11", desember: "12"
+    };
+    
+    const month = months[monthStr];
+    if (!month) return dateStr;
+    return `${day}/${month}/${year}`;
+  };
+
+  const parseDanamonRows = (rows: string[][]): Transaction[] => {
+    // Header check: "Account Number", "Account Name" ... "Posting Date" (idx 9) ... "Description" (idx 13)
+    const headerIdx = rows.findIndex(
+      (r) =>
+        r.length > 13 &&
+        r[0].toLowerCase().includes("account number") &&
+        r[13].toLowerCase().includes("description")
+    );
+
+    if (headerIdx < 0) return [];
+
+    const dataRows = rows.slice(headerIdx + 1);
+    const txs: Transaction[] = [];
+    let id = 1;
+
+    for (const r of dataRows) {
+      if (r.length < 16) continue;
+      
+      const postingDate = r[9]; // "02 Feb 2026"
+      const description = r[13];
+      const branch = r[11];
+      const debitRaw = r[14];
+      const creditRaw = r[15];
+      const balanceRaw = r[16];
+
+      const debit = toNumber(debitRaw) || 0;
+      const credit = toNumber(creditRaw) || 0;
+      const balance = toNumber(balanceRaw) || 0;
+
+      // Skip if both 0 (unless we want to show 0 value txs?)
+      if (debit === 0 && credit === 0) continue;
+
+      let amount = 0;
+      let direction: "in" | "out" | undefined;
+
+      if (credit > 0) {
+        amount = credit;
+        direction = "in";
+      } else {
+        amount = debit;
+        direction = "out";
+      }
+
+      txs.push({
+        id: id++,
+        date: parseDanamonDate(postingDate),
+        description,
+        branch: (branch || "").trim() || "UNKNOWN",
+        amount,
+        direction,
+        balance,
+        status: "posted",
+      });
+    }
+    return txs;
+  };
+
   const parseByBank = (selectedBank: string, rows: string[][]): Transaction[] => {
     // Find the bank object to get its format
     const bankObj = bankList.find((b) => b.code === selectedBank);
     // Default to GENERIC if not found or no format specified
     const format = bankObj?.format || "GENERIC";
 
-    if (format === "BCA") {
+    if (format === "DANAMON") {
+      const danamon = parseDanamonRows(rows);
+      if (danamon.length > 0) return danamon;
+    }
+
+    if (format === "BCA" || format === "GENERIC") {
       const bca = parseStatementRows(rows);
       if (bca.length > 0) return bca;
-      return parseGenericRows(rows);
+      // Fallback to generic if BCA parser fails but format is GENERIC
+      if (format === "GENERIC") return parseGenericRows(rows);
     }
     
-    // For DANAMON or GENERIC, use generic parser
     return parseGenericRows(rows);
   };
 
@@ -289,6 +382,7 @@ const BankingPage = () => {
         const txs = parseByBank(bank, rows);
         setTransactions(txs);
         setDataSource("csv");
+        setDbOffset(0);
       };
       reader.readAsText(file);
     },
@@ -842,9 +936,14 @@ const BankingPage = () => {
               <Dropdown
                 value={bank}
                 onChange={(e) => {
-                    setBank(e.value);
+                    const newBank = e.value;
+                    setBank(newBank);
+                    // Reset csv transactions when bank changes to avoid mixing formats
+                    if (dataSource === "csv") {
+                        setTransactions([]);
+                    }
                     if (dataSource === "db") {
-                        refreshDatabase(0, rowsPerPage, { bankCode: e.value });
+                        refreshDatabase(0, rowsPerPage, { bankCode: newBank });
                     }
                 }}
                 options={bankList}
@@ -1012,6 +1111,8 @@ const BankingPage = () => {
                     }
                     if (e.value === "db" && bank) {
                       await refreshDatabase(0, rowsPerPage);
+                    } else if (e.value === "csv") {
+                      setDbOffset(0);
                     }
                     setDataSource(e.value);
                   }}
@@ -1120,10 +1221,11 @@ const BankingPage = () => {
             paginator
             lazy={dataSource === "db"}
             totalRecords={dataSource === "db" ? dbTotal : tableData.length}
-            first={dataSource === "db" ? dbOffset : 0}
+            first={dbOffset}
             onPage={async (e) => {
+              setRowsPerPage(e.rows);
+              setDbOffset(e.first);
               if (dataSource === "db" && bank) {
-                setRowsPerPage(e.rows);
                 await refreshDatabase(e.first, e.rows);
               }
             }}

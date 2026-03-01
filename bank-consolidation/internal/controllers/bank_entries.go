@@ -42,24 +42,6 @@ func computeFingerprint(dt time.Time, desc, branch string, amount float64, amtTy
 	return hex.EncodeToString(h[:])
 }
 
-func parseDate(s string) (time.Time, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return time.Time{}, errors.New("transactionDate is required")
-	}
-	if strings.Contains(s, "/") {
-		return time.Parse("02/01/2006", s)
-	}
-	// try RFC3339 or date-only
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, nil
-	}
-	if t, err := time.Parse("2006-01-02", s); err == nil {
-		return t, nil
-	}
-	return time.Time{}, errors.New("unsupported date format")
-}
-
 func (c BankEntryController) CreateOrList(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
@@ -100,12 +82,12 @@ func (c BankEntryController) CreateOrList(w http.ResponseWriter, r *http.Request
 			Joins("LEFT JOIN (SELECT bank_entry_id, COUNT(1) AS attached_count, COALESCE(SUM(matched_amount),0) AS matched_total FROM bank_entry_invoices GROUP BY bank_entry_id) st ON st.bank_entry_id = bank_entries.id")
 
 		if start := q.Get("startDate"); start != "" {
-			if t, err := parseDate(start); err == nil {
+			if t, err := models.ParseDate(start); err == nil {
 				db = db.Where("bank_entries.transaction_date >= ?", t)
 			}
 		}
 		if end := q.Get("endDate"); end != "" {
-			if t, err := parseDate(end); err == nil {
+			if t, err := models.ParseDate(end); err == nil {
 				// make it end of day
 				t = t.Add(24 * time.Hour).Add(-1 * time.Second)
 				db = db.Where("bank_entries.transaction_date <= ?", t)
@@ -132,6 +114,29 @@ func (c BankEntryController) CreateOrList(w http.ResponseWriter, r *http.Request
 			db = db.Where("bank_entries.is_finalized = ? OR bank_entries.is_finalized IS NULL", false)
 		}
 
+		// Pagination
+		limitStr := q.Get("limit")
+		offsetStr := q.Get("offset")
+		limit := 0
+		offset := 0
+		if limitStr != "" {
+			limit, _ = strconv.Atoi(limitStr)
+		}
+		if offsetStr != "" {
+			offset, _ = strconv.Atoi(offsetStr)
+		}
+
+		var total int64
+		// Use a session for count to avoid modifying the main query
+		if err := db.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if limit > 0 {
+			db = db.Limit(limit).Offset(offset)
+		}
+
 		var entries []bankEntryRow
 		if err := db.Find(&entries).Error; err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -148,7 +153,17 @@ func (c BankEntryController) CreateOrList(w http.ResponseWriter, r *http.Request
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+
+		response := map[string]interface{}{
+			"items": resp,
+			"pagination": map[string]interface{}{
+				"total":   total,
+				"limit":   limit,
+				"offset":  offset,
+				"hasNext": int64(offset+len(resp)) < total,
+			},
+		}
+		json.NewEncoder(w).Encode(response)
 
 	case http.MethodPut:
 		// Handle Finalize Action
@@ -574,7 +589,7 @@ func (c BankEntryController) UploadCSV(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Try parsing date from first column
-		dt, err := parseDate(record[0])
+		dt, err := models.ParseDate(record[0])
 		if err != nil {
 			if firstLine {
 				firstLine = false
@@ -642,12 +657,12 @@ func (c BankEntryController) ExportReconciled(w http.ResponseWriter, r *http.Req
 	startDateStr := r.URL.Query().Get("startDate")
 	endDateStr := r.URL.Query().Get("endDate")
 	if startDateStr != "" {
-		if t, err := parseDate(startDateStr); err == nil {
+		if t, err := models.ParseDate(startDateStr); err == nil {
 			db = db.Where("bank_entries.transaction_date >= ?", t)
 		}
 	}
 	if endDateStr != "" {
-		if t, err := parseDate(endDateStr); err == nil {
+		if t, err := models.ParseDate(endDateStr); err == nil {
 			db = db.Where("bank_entries.transaction_date <= ?", t)
 		}
 	}
