@@ -11,7 +11,7 @@ import (
 	"os"
 )
 
-//go:embed frontend/out frontend/out/_next
+//go:embed frontend/out frontend/out/_next frontend/out/themes
 var frontendEmbed embed.FS
 
 func main() {

@@ -2,9 +2,11 @@ package controllers
 
 import (
 	"bank-consolidation/models"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type InvoiceController struct{ DB *gorm.DB }
@@ -95,6 +98,14 @@ func (c InvoiceController) BulkCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var headers []models.InvoiceHeader
+
+	// Read body for debugging
+	bodyBytes, _ := io.ReadAll(r.Body)
+	// Restore body
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	fmt.Printf("DEBUG: Received Payload: %s\n", string(bodyBytes))
+
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&headers); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -119,14 +130,14 @@ func (c InvoiceController) BulkCreate(w http.ResponseWriter, r *http.Request) {
 				header.Status = "pending"
 			}
 
-			if err := tx.Create(&header).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&header).Error; err != nil {
 				return err
 			}
 
 			for _, d := range header.Details {
 				detail := d
 				detail.InvoiceHeaderID = header.InvoiceHeaderID
-				if err := tx.Create(&detail).Error; err != nil {
+				if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&detail).Error; err != nil {
 					return err
 				}
 			}
