@@ -9,6 +9,7 @@ import { SelectButton } from "primereact/selectbutton";
 import { Dropdown } from "primereact/dropdown";
 import { Calendar } from "primereact/calendar";
 import { InputNumber } from "primereact/inputnumber";
+import { InputText } from "primereact/inputtext";
 import { Toast } from "primereact/toast";
 import { Dialog } from "primereact/dialog";
 import { api } from "@/app/lib/api";
@@ -65,18 +66,32 @@ const BankingPage = () => {
   const toast = useRef<Toast | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [directionFilter, setDirectionFilter] = useState<"all" | "in" | "out">(
-    "all"
+    "all",
   );
   const [rowsPerPage, setRowsPerPage] = useState<number>(5);
   const [bank, setBank] = useState<string | null>(null);
   const [bankList, setBankList] = useState<BankModel[]>([]);
   const [dataSource, setDataSource] = useState<DataSource>("csv");
   const [dbEntries, setDbEntries] = useState<BankEntry[]>([]);
-  const [monthFilter, setMonthFilter] = useState<Date | null>(null);
+  const [monthFilter, setMonthFilter] = useState<Date | null>(new Date());
+  const [searchDesc, setSearchDesc] = useState("");
+  const [searchBranch, setSearchBranch] = useState("");
+
+  const selectedMonthKey = useMemo(() => {
+    if (!monthFilter) return "";
+    const y = monthFilter.getFullYear();
+    const m = `${monthFilter.getMonth() + 1}`.padStart(2, "0");
+    return `${y}-${m}`;
+  }, [monthFilter]);
+
   const [dbTotal, setDbTotal] = useState<number>(0);
   const [dbOffset, setDbOffset] = useState<number>(0);
   const [recVisible, setRecVisible] = useState<boolean>(false);
-  const [recEntry, setRecEntry] = useState<{ id?: string; amount: number; description: string } | null>(null);
+  const [recEntry, setRecEntry] = useState<{
+    id?: string;
+    amount: number;
+    description: string;
+  } | null>(null);
   const [invoiceItems, setInvoiceItems] = useState<any[]>([]);
   const [invoiceTotal, setInvoiceTotal] = useState<number>(0);
   const [invoiceRows, setInvoiceRows] = useState<number>(10);
@@ -84,12 +99,22 @@ const BankingPage = () => {
   const [invoiceLoading, setInvoiceLoading] = useState<boolean>(false);
   const [invoiceSelection, setInvoiceSelection] = useState<any[]>([]);
   const [recIncludeIds, setRecIncludeIds] = useState<string[]>([]);
-  const [reconciliations, setReconciliations] = useState<Record<string, { invoiceIds: string[]; none?: boolean; delta: number }>>({});
+  const [reconciliations, setReconciliations] = useState<
+    Record<string, { invoiceIds: string[]; none?: boolean; delta: number }>
+  >({});
   const [allocations, setAllocations] = useState<Record<string, number>>({});
+  const [recSearchCustomer, setRecSearchCustomer] = useState("");
+  const [recSearchCompany, setRecSearchCompany] = useState("");
+  const [recSearchInvoiceNo, setRecSearchInvoiceNo] = useState("");
 
   const [viewAttachedVisible, setViewAttachedVisible] = useState(false);
-  const [viewAttachedEntry, setViewAttachedEntry] = useState<{ id?: string; description: string } | null>(null);
-  const [viewAttachedInvoices, setViewAttachedInvoices] = useState<AttachedInvoice[]>([]);
+  const [viewAttachedEntry, setViewAttachedEntry] = useState<{
+    id?: string;
+    description: string;
+  } | null>(null);
+  const [viewAttachedInvoices, setViewAttachedInvoices] = useState<
+    AttachedInvoice[]
+  >([]);
 
   // Manual Entry State
   const [manualVisible, setManualVisible] = useState(false);
@@ -190,7 +215,7 @@ const BankingPage = () => {
         r[1].toLowerCase().includes("keterangan") &&
         r[2].toLowerCase().includes("cabang") &&
         r[3].toLowerCase().includes("jumlah") &&
-        r[4].toLowerCase().includes("saldo")
+        r[4].toLowerCase().includes("saldo"),
     );
     if (headerIdx < 0) return [];
 
@@ -274,19 +299,39 @@ const BankingPage = () => {
     if (!dateStr) return "";
     const parts = dateStr.trim().split(" ");
     if (parts.length !== 3) return dateStr;
-    
+
     const day = parts[0];
     const monthStr = parts[1].toLowerCase();
     const year = parts[2];
-    
+
     const months: Record<string, string> = {
-      jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
-      jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+      jan: "01",
+      feb: "02",
+      mar: "03",
+      apr: "04",
+      may: "05",
+      jun: "06",
+      jul: "07",
+      aug: "08",
+      sep: "09",
+      oct: "10",
+      nov: "11",
+      dec: "12",
       // Indonesian months mapping just in case
-      januari: "01", februari: "02", maret: "03", april: "04", mei: "05", juni: "06",
-      juli: "07", agustus: "08", september: "09", oktober: "10", november: "11", desember: "12"
+      januari: "01",
+      februari: "02",
+      maret: "03",
+      april: "04",
+      mei: "05",
+      juni: "06",
+      juli: "07",
+      agustus: "08",
+      september: "09",
+      oktober: "10",
+      november: "11",
+      desember: "12",
     };
-    
+
     const month = months[monthStr];
     if (!month) return dateStr;
     return `${day}/${month}/${year}`;
@@ -298,7 +343,7 @@ const BankingPage = () => {
       (r) =>
         r.length > 13 &&
         r[0].toLowerCase().includes("account number") &&
-        r[13].toLowerCase().includes("description")
+        r[13].toLowerCase().includes("description"),
     );
 
     if (headerIdx < 0) return [];
@@ -309,7 +354,7 @@ const BankingPage = () => {
 
     for (const r of dataRows) {
       if (r.length < 16) continue;
-      
+
       const postingDate = r[9]; // "02 Feb 2026"
       const description = r[13];
       const branch = r[11];
@@ -349,7 +394,10 @@ const BankingPage = () => {
     return txs;
   };
 
-  const parseByBank = (selectedBank: string, rows: string[][]): Transaction[] => {
+  const parseByBank = (
+    selectedBank: string,
+    rows: string[][],
+  ): Transaction[] => {
     // Find the bank object to get its format
     const bankObj = bankList.find((b) => b.code === selectedBank);
     // Default to GENERIC if not found or no format specified
@@ -366,7 +414,6 @@ const BankingPage = () => {
       // Fallback to generic if BCA parser fails but format is GENERIC
       if (format === "GENERIC") return parseGenericRows(rows);
     }
-    
     return parseGenericRows(rows);
   };
 
@@ -386,7 +433,7 @@ const BankingPage = () => {
       };
       reader.readAsText(file);
     },
-    [bank, bankList]
+    [bank, bankList],
   );
 
   const totalIn = useMemo(
@@ -394,21 +441,32 @@ const BankingPage = () => {
       transactions
         .filter((t) => t.amount > 0)
         .reduce((acc, t) => acc + t.amount, 0),
-    [transactions]
+    [transactions],
   );
   const totalOut = useMemo(
     () =>
       transactions
         .filter((t) => t.amount < 0)
         .reduce((acc, t) => acc + Math.abs(t.amount), 0),
-    [transactions]
+    [transactions],
   );
   const filteredTransactions = useMemo(() => {
-    if (directionFilter === "all") return transactions;
-    return transactions.filter((t) =>
-      directionFilter === "in" ? t.amount > 0 : t.amount < 0
-    );
-  }, [transactions, directionFilter]);
+    let res = transactions;
+    if (directionFilter !== "all") {
+      res = res.filter((t) =>
+        directionFilter === "in" ? t.amount > 0 : t.amount < 0,
+      );
+    }
+    if (searchDesc) {
+      const q = searchDesc.toLowerCase();
+      res = res.filter((t) => t.description.toLowerCase().includes(q));
+    }
+    if (searchBranch) {
+      const q = searchBranch.toLowerCase();
+      res = res.filter((t) => (t.branch || "").toLowerCase().includes(q));
+    }
+    return res;
+  }, [transactions, directionFilter, searchDesc, searchBranch]);
 
   const formatDateToISO = (dateStr: string) => {
     const parts = dateStr.split("/");
@@ -487,14 +545,13 @@ const BankingPage = () => {
   };
 
   const normalizeResponse = (respData: any) => {
-    const entries =
-      Array.isArray(respData)
-        ? respData
-        : Array.isArray(respData?.data)
-        ? respData.data
-        : Array.isArray(respData?.items)
-        ? respData.items
-        : [];
+    const entries = Array.isArray(respData)
+      ? respData
+      : Array.isArray(respData?.data)
+      ? respData.data
+      : Array.isArray(respData?.items)
+      ? respData.items
+      : [];
     const p = respData?.pagination || {};
     return {
       entries,
@@ -508,7 +565,13 @@ const BankingPage = () => {
   const refreshDatabase = async (
     offset = 0,
     limit = rowsPerPage,
-    opts?: { amountType?: string; month?: string; bankCode?: string }
+    opts?: {
+      amountType?: string;
+      month?: string;
+      bankCode?: string;
+      description?: string;
+      branch?: string;
+    },
   ) => {
     try {
       const activeBank = opts?.bankCode || bank;
@@ -531,6 +594,12 @@ const BankingPage = () => {
           : undefined;
       const monthParam =
         opts?.month !== undefined ? opts.month : selectedMonthKey || undefined;
+
+      const descParam =
+        opts?.description !== undefined ? opts.description : searchDesc;
+      const branchParam =
+        opts?.branch !== undefined ? opts.branch : searchBranch;
+
       const { data } = await api.get<BankEntry[]>("/bank-entries", {
         params: {
           bankCode: activeBank,
@@ -538,6 +607,8 @@ const BankingPage = () => {
           offset,
           amountType: amountTypeParam,
           month: monthParam,
+          description: descParam,
+          branch: branchParam,
         },
       });
       const norm = normalizeResponse(data);
@@ -566,14 +637,6 @@ const BankingPage = () => {
       });
     }
   };
-
-
-  const selectedMonthKey = useMemo(() => {
-    if (!monthFilter) return "";
-    const y = monthFilter.getFullYear();
-    const m = `${monthFilter.getMonth() + 1}`.padStart(2, "0");
-    return `${y}-${m}`;
-  }, [monthFilter]);
 
   const filteredDbTransactions = useMemo(() => {
     if (!bank) return [];
@@ -606,7 +669,11 @@ const BankingPage = () => {
       ? filteredTransactions.map((t) => ({ ...t, bankCode: bank || "" }))
       : filteredDbTransactions;
 
-  const refreshInvoices = async (offset = 0, limit = invoiceRows, includeIds?: string[]) => {
+  const refreshInvoices = async (
+    offset = 0,
+    limit = invoiceRows,
+    includeIds?: string[],
+  ) => {
     try {
       setInvoiceLoading(true);
       const params: any = { limit, offset, excludeFullyPaid: true };
@@ -614,15 +681,18 @@ const BankingPage = () => {
       if (idsToInclude.length > 0) {
         params.includeIds = idsToInclude.join(",");
       }
+      if (recSearchCustomer) params.customerName = recSearchCustomer;
+      if (recSearchCompany) params.companyCode = recSearchCompany;
+      if (recSearchInvoiceNo) params.invoiceNo = recSearchInvoiceNo;
+
       const { data } = await api.get("/invoices", { params });
-      const entries =
-        Array.isArray(data)
-          ? data
-          : Array.isArray(data?.data)
-          ? data.data
-          : Array.isArray(data?.items)
-          ? data.items
-          : [];
+      const entries = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data?.items)
+        ? data.items
+        : [];
       const p = data?.pagination || {};
       setInvoiceItems(entries);
       setInvoiceTotal(typeof p.total === "number" ? p.total : entries.length);
@@ -658,8 +728,15 @@ const BankingPage = () => {
       });
       return;
     }
-    setRecEntry({ id: row.entryId, amount: Math.abs(row.amount), description: row.description, });
-    
+    setRecEntry({
+      id: row.entryId,
+      amount: Math.abs(row.amount),
+      description: row.description,
+    });
+    setRecSearchCustomer("");
+    setRecSearchCompany("");
+    setRecSearchInvoiceNo("");
+
     let ids: string[] = [];
     let selection: any[] = [];
 
@@ -691,15 +768,17 @@ const BankingPage = () => {
     setRecIncludeIds(ids);
     setRecVisible(true);
     const fetchedItems = await refreshInvoices(0, invoiceRows, ids);
-    
+
     // Ensure selection uses the exact objects from the table data to avoid reference issues
     // and ensure they are visually selected.
     if (ids.length > 0 && fetchedItems && fetchedItems.length > 0) {
-        const attachedSet = new Set(ids);
-        const validSelection = fetchedItems.filter((item: any) => attachedSet.has(String(item.id)));
-        setInvoiceSelection(validSelection);
+      const attachedSet = new Set(ids);
+      const validSelection = fetchedItems.filter((item: any) =>
+        attachedSet.has(String(item.id)),
+      );
+      setInvoiceSelection(validSelection);
     } else {
-        setInvoiceSelection([]);
+      setInvoiceSelection([]);
     }
   };
 
@@ -707,10 +786,16 @@ const BankingPage = () => {
     return invoiceSelection.reduce((acc, it) => {
       // Use allocation if set, otherwise 0
       const alloc = allocations[it.id];
-      if (typeof alloc === 'number') return acc + alloc;
-      
-      const total = typeof it.totalAmount === "number" ? it.totalAmount : Number(it.totalAmount || 0);
-      const paid = typeof it.paidAmount === "number" ? it.paidAmount : Number(it.paidAmount || 0);
+      if (typeof alloc === "number") return acc + alloc;
+
+      const total =
+        typeof it.totalAmount === "number"
+          ? it.totalAmount
+          : Number(it.totalAmount || 0);
+      const paid =
+        typeof it.paidAmount === "number"
+          ? it.paidAmount
+          : Number(it.paidAmount || 0);
       const remaining = total - paid;
       return acc + (isNaN(remaining) ? 0 : Math.max(remaining, 0));
     }, 0);
@@ -733,7 +818,7 @@ const BankingPage = () => {
     }
     try {
       const { data } = await api.get<AttachedInvoice[]>(
-        `/bank-entries/${row.entryId}/invoices`
+        `/bank-entries/${row.entryId}/invoices`,
       );
       setViewAttachedEntry({ id: row.entryId, description: row.description });
       setViewAttachedInvoices(Array.isArray(data) ? data : []);
@@ -755,7 +840,11 @@ const BankingPage = () => {
     }
   };
 
-  const saveReconcile = async (entryId: string, invoices: any[], note?: string) => {
+  const saveReconcile = async (
+    entryId: string,
+    invoices: any[],
+    note?: string,
+  ) => {
     try {
       const payload = {
         invoices: invoices.map((inv) => ({
@@ -764,8 +853,9 @@ const BankingPage = () => {
             allocations[inv.id] !== undefined
               ? allocations[inv.id]
               : Math.max(
-                  (Number(inv.totalAmount) || 0) - (Number(inv.paidAmount) || 0),
-                  0
+                  (Number(inv.totalAmount) || 0) -
+                    (Number(inv.paidAmount) || 0),
+                  0,
                 ),
         })),
         note,
@@ -798,10 +888,10 @@ const BankingPage = () => {
 
     try {
       const { data: updatedEntry } = await api.get<BankEntry>(
-        `/bank-entries/${recEntry.id}`
+        `/bank-entries/${recEntry.id}`,
       );
       setDbEntries((prev) =>
-        prev.map((e) => (e.id === recEntry.id ? updatedEntry : e))
+        prev.map((e) => (e.id === recEntry.id ? updatedEntry : e)),
       );
       setReconciliations((prev) => {
         const next = { ...prev };
@@ -823,10 +913,10 @@ const BankingPage = () => {
 
     try {
       const { data: updatedEntry } = await api.get<BankEntry>(
-        `/bank-entries/${recEntry.id}`
+        `/bank-entries/${recEntry.id}`,
       );
       setDbEntries((prev) =>
-        prev.map((e) => (e.id === recEntry.id ? updatedEntry : e))
+        prev.map((e) => (e.id === recEntry.id ? updatedEntry : e)),
       );
       setReconciliations((prev) => {
         const next = { ...prev };
@@ -843,8 +933,12 @@ const BankingPage = () => {
 
   const saveManualEntry = async () => {
     if (!bank || !manualData.amount || !manualData.description) {
-        toast.current?.show({ severity: "warn", summary: "Validation", detail: "Please fill all fields" });
-        return;
+      toast.current?.show({
+        severity: "warn",
+        summary: "Validation",
+        detail: "Please fill all fields",
+      });
+      return;
     }
     try {
       await api.post("/bank-entries", {
@@ -854,15 +948,28 @@ const BankingPage = () => {
         amount: manualData.amount,
         amountType: manualData.type,
         bankCode: bank,
-        balance: 0
+        balance: 0,
       });
-      toast.current?.show({ severity: "success", summary: "Saved", detail: "Entry added" });
+      toast.current?.show({
+        severity: "success",
+        summary: "Saved",
+        detail: "Entry added",
+      });
       setManualVisible(false);
-      setManualData({ date: new Date(), description: "", amount: 0, type: "CR" });
+      setManualData({
+        date: new Date(),
+        description: "",
+        amount: 0,
+        type: "CR",
+      });
       refreshDatabase();
     } catch (e) {
       console.error(e);
-      toast.current?.show({ severity: "error", summary: "Error", detail: "Failed to save" });
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Failed to save",
+      });
     }
   };
 
@@ -871,7 +978,11 @@ const BankingPage = () => {
 
   const handleExport = async () => {
     if (!exportRange || !exportRange[0] || !exportRange[1]) {
-      toast.current?.show({ severity: "warn", summary: "Validation", detail: "Please select start and end date" });
+      toast.current?.show({
+        severity: "warn",
+        summary: "Validation",
+        detail: "Please select start and end date",
+      });
       return;
     }
     const [start, end] = exportRange;
@@ -880,14 +991,14 @@ const BankingPage = () => {
     try {
       const formatDate = (d: Date) => {
         const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
         return `${year}-${month}-${day}`;
       };
       const startStr = formatDate(start);
       const endStr = formatDate(end);
       const url = `/bank-entries/export/reconciled?startDate=${startStr}&endDate=${endStr}`;
-      
+
       // Trigger download
       const response = await api.get(url, { responseType: "blob" });
       const href = window.URL.createObjectURL(response.data);
@@ -900,7 +1011,11 @@ const BankingPage = () => {
       setExportVisible(false);
     } catch (e) {
       console.error("Export error", e);
-      toast.current?.show({ severity: "error", summary: "Error", detail: "Export failed" });
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Export failed",
+      });
     }
   };
 
@@ -920,7 +1035,11 @@ const BankingPage = () => {
       refreshDatabase(dbOffset, rowsPerPage);
     } catch (e) {
       console.error(e);
-      toast.current?.show({ severity: "error", summary: "Error", detail: "Failed to finalize" });
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Failed to finalize",
+      });
     } finally {
       setFinalizeLoading(false);
     }
@@ -936,15 +1055,15 @@ const BankingPage = () => {
               <Dropdown
                 value={bank}
                 onChange={(e) => {
-                    const newBank = e.value;
-                    setBank(newBank);
-                    // Reset csv transactions when bank changes to avoid mixing formats
-                    if (dataSource === "csv") {
-                        setTransactions([]);
-                    }
-                    if (dataSource === "db") {
-                        refreshDatabase(0, rowsPerPage, { bankCode: newBank });
-                    }
+                  const newBank = e.value;
+                  setBank(newBank);
+                  // Reset csv transactions when bank changes to avoid mixing formats
+                  if (dataSource === "csv") {
+                    setTransactions([]);
+                  }
+                  if (dataSource === "db") {
+                    refreshDatabase(0, rowsPerPage, { bankCode: newBank });
+                  }
                 }}
                 options={bankList}
                 optionLabel="name"
@@ -959,7 +1078,12 @@ const BankingPage = () => {
                 disabled={!bank}
               />
               {bank && (
-                  <Button label="Add Entry" icon="pi pi-plus" onClick={() => setManualVisible(true)} className="p-button-success" />
+                <Button
+                  label="Add Entry"
+                  icon="pi pi-plus"
+                  onClick={() => setManualVisible(true)}
+                  className="p-button-success"
+                />
               )}
               <Button
                 label="Clear"
@@ -995,7 +1119,11 @@ const BankingPage = () => {
                   <span className="block text-500 font-medium mb-2">
                     Current View Count
                   </span>
-                  <div className="text-900 font-medium text-xl">{dataSource === 'csv' ? filteredTransactions.length : dbEntries.length}</div>
+                  <div className="text-900 font-medium text-xl">
+                    {dataSource === "csv"
+                      ? filteredTransactions.length
+                      : dbEntries.length}
+                  </div>
                 </div>
                 <div
                   className="flex align-items-center justify-content-center bg-blue-100 border-round"
@@ -1014,9 +1142,14 @@ const BankingPage = () => {
                   </span>
                   <div className="text-900 font-medium text-xl">
                     {formatCurrency(
-                        dataSource === 'csv' 
-                            ? totalBalance 
-                            : dbEntries.reduce((acc, e) => acc + (e.amountType === 'CR' ? e.amount : -e.amount), 0)
+                      dataSource === "csv"
+                        ? totalBalance
+                        : dbEntries.reduce(
+                            (acc, e) =>
+                              acc +
+                              (e.amountType === "CR" ? e.amount : -e.amount),
+                            0,
+                          ),
                     )}
                   </div>
                 </div>
@@ -1039,17 +1172,21 @@ const BankingPage = () => {
                     In:{" "}
                     <span className="text-green-600">
                       {formatCurrency(
-                          dataSource === 'csv' 
-                              ? totalIn 
-                              : dbEntries.filter(e => e.amountType === 'CR').reduce((acc, e) => acc + e.amount, 0)
+                        dataSource === "csv"
+                          ? totalIn
+                          : dbEntries
+                              .filter((e) => e.amountType === "CR")
+                              .reduce((acc, e) => acc + e.amount, 0),
                       )}
                     </span>{" "}
                     Out:{" "}
                     <span className="text-pink-600">
                       {formatCurrency(
-                        dataSource === 'csv' 
-                            ? totalOut 
-                            : dbEntries.filter(e => e.amountType === 'DB').reduce((acc, e) => acc + e.amount, 0)
+                        dataSource === "csv"
+                          ? totalOut
+                          : dbEntries
+                              .filter((e) => e.amountType === "DB")
+                              .reduce((acc, e) => acc + e.amount, 0),
                       )}
                     </span>
                   </div>
@@ -1073,28 +1210,77 @@ const BankingPage = () => {
         style={{ width: "30vw" }}
         onHide={() => setExportVisible(false)}
       >
-          <div className="flex flex-column gap-2">
-            <label htmlFor="export-dates">Select Date Range</label>
-            <Calendar
-                id="export-dates"
-                value={exportRange}
-                onChange={(e) => setExportRange(e.value as any)}
-                selectionMode="range"
-                readOnlyInput
-                showIcon
+        <div className="flex flex-column gap-2">
+          <label htmlFor="export-dates">Select Date Range</label>
+          <Calendar
+            id="export-dates"
+            value={exportRange}
+            onChange={(e) => setExportRange(e.value as any)}
+            selectionMode="range"
+            readOnlyInput
+            showIcon
+          />
+          <div className="flex justify-content-end mt-4">
+            <Button
+              label="Cancel"
+              icon="pi pi-times"
+              onClick={() => setExportVisible(false)}
+              className="p-button-text"
             />
-            <div className="flex justify-content-end mt-4">
-                <Button label="Cancel" icon="pi pi-times" onClick={() => setExportVisible(false)} className="p-button-text" />
-                <Button label="Export" icon="pi pi-check" onClick={handleExport} autoFocus />
-            </div>
+            <Button
+              label="Export"
+              icon="pi pi-check"
+              onClick={handleExport}
+              autoFocus
+            />
           </div>
+        </div>
       </Dialog>
 
       <div className="col-12">
         <div className="card">
           <div className="flex justify-content-between align-items-center mb-3">
             <h5>Transactions</h5>
-            <div className="flex align-items-center gap-3">
+            <div className="flex align-items-center gap-3 flex-wrap">
+              <div className="flex align-items-center gap-2">
+                <span className="p-input-icon-left">
+                  <i className="pi pi-search" />
+                  <InputText
+                    value={searchDesc}
+                    onChange={(e) => setSearchDesc(e.target.value)}
+                    onKeyDown={(e) =>
+                      e.key === "Enter" &&
+                      dataSource === "db" &&
+                      refreshDatabase(0, rowsPerPage)
+                    }
+                    placeholder="Desc..."
+                    className="w-12rem"
+                  />
+                </span>
+                <span className="p-input-icon-left">
+                  <i className="pi pi-search" />
+                  <InputText
+                    value={searchBranch}
+                    onChange={(e) => setSearchBranch(e.target.value)}
+                    onKeyDown={(e) =>
+                      e.key === "Enter" &&
+                      dataSource === "db" &&
+                      refreshDatabase(0, rowsPerPage)
+                    }
+                    placeholder="Branch..."
+                    className="w-8rem"
+                  />
+                </span>
+                {dataSource === "db" && (
+                  <Button
+                    label="Search"
+                    icon="pi pi-search"
+                    className="p-button-outlined"
+                    onClick={() => refreshDatabase(0, rowsPerPage)}
+                    tooltip="Search Database"
+                  />
+                )}
+              </div>
               <div className="flex align-items-center gap-2">
                 <span className="text-600">Source</span>
                 <SelectButton
@@ -1126,7 +1312,10 @@ const BankingPage = () => {
                 <span className="text-600">Show</span>
                 <Dropdown
                   value={rowsPerPage}
-                  options={[5, 10, 20, 50].map((n) => ({ label: String(n), value: n }))}
+                  options={[5, 10, 20, 50].map((n) => ({
+                    label: String(n),
+                    value: n,
+                  }))}
                   onChange={async (e) => {
                     setRowsPerPage(e.value);
                     if (dataSource === "db" && bank) {
@@ -1233,13 +1422,18 @@ const BankingPage = () => {
             dataKey="id"
           >
             {dataSource === "db" && (
-              <Column selectionMode="multiple" headerStyle={{ width: "3rem" }} />
+              <Column
+                selectionMode="multiple"
+                headerStyle={{ width: "3rem" }}
+              />
             )}
             <Column
               field="date"
               header="Date"
               style={{ width: "15%" }}
-              body={(t: Transaction) => <span>{formatDisplayDate(t.date)}</span>}
+              body={(t: Transaction) => (
+                <span>{formatDisplayDate(t.date)}</span>
+              )}
             />
             <Column field="bankCode" header="Bank" style={{ width: "10%" }} />
             <Column
@@ -1302,7 +1496,9 @@ const BankingPage = () => {
               header="Delta"
               style={{ width: "10%" }}
               body={(row: any) => {
-                const rec = row.entryId ? reconciliations[row.entryId] : undefined;
+                const rec = row.entryId
+                  ? reconciliations[row.entryId]
+                  : undefined;
                 let val = 0;
                 let hasData = false;
 
@@ -1312,14 +1508,22 @@ const BankingPage = () => {
                 } else if (typeof row.delta === "number") {
                   val = row.delta;
                   hasData = true;
-                } else if (typeof row.matchedTotal === "number" && row.attachedCount > 0) {
+                } else if (
+                  typeof row.matchedTotal === "number" &&
+                  row.attachedCount > 0
+                ) {
                   val = Math.abs(row.amount) - row.matchedTotal;
                   hasData = true;
                 }
 
                 if (!hasData) return <span>-</span>;
                 const ok = Math.abs(val) < 0.0001;
-                return <Tag value={ok ? "0" : formatCurrency(val)} severity={ok ? "success" : "warning"} />;
+                return (
+                  <Tag
+                    value={ok ? "0" : formatCurrency(val)}
+                    severity={ok ? "success" : "warning"}
+                  />
+                );
               }}
             />
             <Column
@@ -1360,16 +1564,66 @@ const BankingPage = () => {
         modal
       >
         <div className="mb-3">
-          <div className="text-700">
+          <div className="text-700 mb-2">
             Record:{" "}
             <strong>{recEntry ? formatCurrency(recEntry.amount) : "-"}</strong>
             {" · "}
             Invoices Sum: <strong>{formatCurrency(invoiceSum)}</strong>
             {" · "}
             Delta:{" "}
-            <strong className={Math.abs(currentDelta) < 0.0001 ? "text-green-600" : "text-orange-500"}>
+            <strong
+              className={
+                Math.abs(currentDelta) < 0.0001
+                  ? "text-green-600"
+                  : "text-orange-500"
+              }
+            >
               {formatCurrency(currentDelta)}
             </strong>
+          </div>
+          <div className="flex gap-2">
+            <span className="p-input-icon-left flex-1">
+              <i className="pi pi-search" />
+              <InputText
+                value={recSearchInvoiceNo}
+                onChange={(e) => setRecSearchInvoiceNo(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && refreshInvoices(0, invoiceRows)
+                }
+                placeholder="Invoice No"
+                className="w-full p-inputtext-sm"
+              />
+            </span>
+            <span className="p-input-icon-left flex-1">
+              <i className="pi pi-search" />
+              <InputText
+                value={recSearchCustomer}
+                onChange={(e) => setRecSearchCustomer(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && refreshInvoices(0, invoiceRows)
+                }
+                placeholder="Customer Name"
+                className="w-full p-inputtext-sm"
+              />
+            </span>
+            <span className="p-input-icon-left flex-1">
+              <i className="pi pi-search" />
+              <InputText
+                value={recSearchCompany}
+                onChange={(e) => setRecSearchCompany(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && refreshInvoices(0, invoiceRows)
+                }
+                placeholder="Company Code"
+                className="w-full p-inputtext-sm"
+              />
+            </span>
+            <Button
+              icon="pi pi-search"
+              className="p-button-sm"
+              onClick={() => refreshInvoices(0, invoiceRows)}
+              tooltip="Apply Filter"
+            />
           </div>
         </div>
         <DataTable
@@ -1397,7 +1651,9 @@ const BankingPage = () => {
                 // If not set, init default
                 if (next[item.id] === undefined) {
                   // If it's a new item, default to remaining amount
-                  const remaining = (Number(item.totalAmount) || 0) - (Number(item.paidAmount) || 0);
+                  const remaining =
+                    (Number(item.totalAmount) || 0) -
+                    (Number(item.paidAmount) || 0);
                   next[item.id] = remaining > 0 ? remaining : 0;
                 }
               });
@@ -1408,16 +1664,34 @@ const BankingPage = () => {
           isDataSelectable={(e) => {
             const paid = Number(e.data.paidAmount || 0);
             const total = Number(e.data.totalAmount || 0);
-            const isSelected = invoiceSelection.some((sel) => sel.id === e.data.id);
+            const isSelected = invoiceSelection.some(
+              (sel) => sel.id === e.data.id,
+            );
             return paid < total || isSelected;
           }}
         >
           <Column selectionMode="multiple" headerStyle={{ width: "3rem" }} />
           <Column field="invoiceNo" header="Invoice No" />
-          <Column field="invoiceDate" header="Date" body={(r) => <span>{formatDisplayDate(r.invoiceDate)}</span>} />
+          <Column
+            field="invoiceDate"
+            header="Date"
+            body={(r) => <span>{formatDisplayDate(r.invoiceDate)}</span>}
+          />
           <Column field="customerName" header="Customer" />
-          <Column field="totalAmount" header="Total" body={(r) => <span>{formatCurrency(Number(r.totalAmount || 0))}</span>} />
-          <Column field="paidAmount" header="Paid" body={(r) => <span>{formatCurrency(Number(r.paidAmount || 0))}</span>} />
+          <Column
+            field="totalAmount"
+            header="Total"
+            body={(r) => (
+              <span>{formatCurrency(Number(r.totalAmount || 0))}</span>
+            )}
+          />
+          <Column
+            field="paidAmount"
+            header="Paid"
+            body={(r) => (
+              <span>{formatCurrency(Number(r.paidAmount || 0))}</span>
+            )}
+          />
           <Column
             header="To Pay"
             body={(r) => {
@@ -1429,7 +1703,10 @@ const BankingPage = () => {
                 <InputNumber
                   value={allocations[r.id] ?? 0}
                   onValueChange={(e) => {
-                    setAllocations((prev) => ({ ...prev, [r.id]: e.value || 0 }));
+                    setAllocations((prev) => ({
+                      ...prev,
+                      [r.id]: e.value || 0,
+                    }));
                   }}
                   mode="currency"
                   currency="IDR"
@@ -1451,8 +1728,16 @@ const BankingPage = () => {
           />
         </DataTable>
         <div className="flex justify-content-end gap-2 mt-3">
-          <Button label="Set No Records" severity="secondary" onClick={setNoRecords} />
-          <Button label="Attach Selected" icon="pi pi-check" onClick={attachSelected} />
+          <Button
+            label="Set No Records"
+            severity="secondary"
+            onClick={setNoRecords}
+          />
+          <Button
+            label="Attach Selected"
+            icon="pi pi-check"
+            onClick={attachSelected}
+          />
         </div>
       </Dialog>
       <Dialog
@@ -1466,7 +1751,11 @@ const BankingPage = () => {
         style={{ width: "50vw" }}
         modal
       >
-        <DataTable value={viewAttachedInvoices} responsiveLayout="scroll" dataKey="id">
+        <DataTable
+          value={viewAttachedInvoices}
+          responsiveLayout="scroll"
+          dataKey="id"
+        >
           <Column field="invoiceNo" header="Invoice No" />
           <Column field="invoiceDate" header="Date" />
           <Column field="customerName" header="Customer" />
@@ -1484,26 +1773,57 @@ const BankingPage = () => {
         </DataTable>
       </Dialog>
       <Toast ref={toast} />
-      <Dialog header="Manual Entry" visible={manualVisible} onHide={() => setManualVisible(false)} style={{ width: '400px' }}>
-          <div className="flex flex-column gap-3">
-              <div className="flex flex-column gap-2">
-                  <label>Date</label>
-                  <Calendar value={manualData.date} onChange={(e) => setManualData({...manualData, date: e.value as Date})} showIcon />
-              </div>
-              <div className="flex flex-column gap-2">
-                  <label>Description</label>
-                  <input className="p-inputtext p-component" value={manualData.description} onChange={(e) => setManualData({...manualData, description: e.target.value})} />
-              </div>
-              <div className="flex flex-column gap-2">
-                  <label>Amount</label>
-                  <InputNumber value={manualData.amount} onValueChange={(e) => setManualData({...manualData, amount: e.value || 0})} mode="currency" currency="IDR" />
-              </div>
-              <div className="flex flex-column gap-2">
-                  <label>Type</label>
-                  <SelectButton value={manualData.type} options={[{label: "Money In", value: "CR"}, {label: "Money Out", value: "DB"}]} onChange={(e) => setManualData({...manualData, type: e.value})} />
-              </div>
-              <Button label="Save" onClick={saveManualEntry} />
+      <Dialog
+        header="Manual Entry"
+        visible={manualVisible}
+        onHide={() => setManualVisible(false)}
+        style={{ width: "400px" }}
+      >
+        <div className="flex flex-column gap-3">
+          <div className="flex flex-column gap-2">
+            <label>Date</label>
+            <Calendar
+              value={manualData.date}
+              onChange={(e) =>
+                setManualData({ ...manualData, date: e.value as Date })
+              }
+              showIcon
+            />
           </div>
+          <div className="flex flex-column gap-2">
+            <label>Description</label>
+            <input
+              className="p-inputtext p-component"
+              value={manualData.description}
+              onChange={(e) =>
+                setManualData({ ...manualData, description: e.target.value })
+              }
+            />
+          </div>
+          <div className="flex flex-column gap-2">
+            <label>Amount</label>
+            <InputNumber
+              value={manualData.amount}
+              onValueChange={(e) =>
+                setManualData({ ...manualData, amount: e.value || 0 })
+              }
+              mode="currency"
+              currency="IDR"
+            />
+          </div>
+          <div className="flex flex-column gap-2">
+            <label>Type</label>
+            <SelectButton
+              value={manualData.type}
+              options={[
+                { label: "Money In", value: "CR" },
+                { label: "Money Out", value: "DB" },
+              ]}
+              onChange={(e) => setManualData({ ...manualData, type: e.value })}
+            />
+          </div>
+          <Button label="Save" onClick={saveManualEntry} />
+        </div>
       </Dialog>
     </div>
   );

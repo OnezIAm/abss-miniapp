@@ -96,6 +96,12 @@ func (c BankEntryController) CreateOrList(w http.ResponseWriter, r *http.Request
 		if bank := q.Get("bankCode"); bank != "" {
 			db = db.Where("bank_entries.bank_code = ?", bank)
 		}
+		if desc := q.Get("description"); desc != "" {
+			db = db.Where("bank_entries.description LIKE ?", "%"+desc+"%")
+		}
+		if branch := q.Get("branch"); branch != "" {
+			db = db.Where("bank_entries.branch LIKE ?", "%"+branch+"%")
+		}
 		if v := q.Get("reconciledOnly"); v == "1" || strings.EqualFold(v, "true") {
 			db = db.Where("COALESCE(st.attached_count,0) > 0")
 		}

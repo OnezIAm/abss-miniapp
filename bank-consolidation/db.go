@@ -219,6 +219,7 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_invoice_headers_company_code_date ON invoice_headers (company_code, invoice_date)`,
 		`CREATE INDEX IF NOT EXISTS idx_invoice_headers_customer_id_date ON invoice_headers (customer_id, invoice_date)`,
 		`CREATE INDEX IF NOT EXISTS idx_invoice_headers_invoice_no ON invoice_headers (invoice_no)`,
+		`CREATE INDEX IF NOT EXISTS idx_invoice_headers_customer_name ON invoice_headers (customer_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_invoice_details_header_id ON invoice_details (header_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_transaction_categories_transaction_id ON transaction_categories (transaction_id)`,
 	}

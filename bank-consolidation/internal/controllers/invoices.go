@@ -271,11 +271,14 @@ func (c InvoiceController) CreateOrList(w http.ResponseWriter, r *http.Request) 
 		if v := q.Get("customerId"); v != "" {
 			db = db.Where("customer_id = ?", v)
 		}
+		if v := q.Get("customerName"); v != "" {
+			db = db.Where("customer_name LIKE ?", "%"+v+"%")
+		}
 		if v := q.Get("invoiceNo"); v != "" {
 			db = db.Where("invoice_no LIKE ?", "%"+v+"%")
 		}
 		if v := q.Get("companyCode"); v != "" {
-			db = db.Where("company_code = ?", v)
+			db = db.Where("company_code LIKE ?", "%"+v+"%")
 		}
 		if v := q.Get("startDate"); v != "" {
 			db = db.Where("invoice_date >= ?", v)

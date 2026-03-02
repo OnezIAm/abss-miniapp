@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DataTable, DataTableExpandedRows } from "primereact/datatable";
 import { Column } from "primereact/column";
 import { Button } from "primereact/button";
+import { InputText } from "primereact/inputtext";
 import { Toast } from "primereact/toast";
 import { Tag } from "primereact/tag";
 import { Toolbar } from "primereact/toolbar";
@@ -33,7 +34,13 @@ const formatCurrency = (value: number, currency = "IDR") =>
 const toDisplayDate = (s: string) => {
   if (!s) return "";
   const d = new Date(s);
-  return isNaN(d.getTime()) ? s : d.toLocaleDateString();
+  return isNaN(d.getTime())
+    ? s
+    : d.toLocaleDateString("id-ID", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      });
 };
 
 const flattenInvoice = (inv: Invoice): Invoice => {
@@ -73,6 +80,10 @@ const InvoicesPage = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [dataSource, setDataSource] = useState<"db" | "local">("db");
 
+  const [searchCustomer, setSearchCustomer] = useState("");
+  const [searchCompany, setSearchCompany] = useState("");
+  const [searchInvoiceNo, setSearchInvoiceNo] = useState("");
+
   const [expandedRows, setExpandedRows] = useState<
     any[] | DataTableExpandedRows | undefined
   >(undefined);
@@ -110,8 +121,13 @@ const InvoicesPage = () => {
   const refresh = async (offset = 0, limit = dbRows) => {
     try {
       setLoading(true);
+      const params: any = { limit, offset };
+      if (searchCustomer) params.customerName = searchCustomer;
+      if (searchCompany) params.companyCode = searchCompany;
+      if (searchInvoiceNo) params.invoiceNo = searchInvoiceNo;
+
       const { data } = await api.get("/invoices", {
-        params: { limit, offset },
+        params,
       });
       const norm = normalizeResponse(data);
       setDbInvoices(norm.entries);
@@ -358,6 +374,8 @@ const InvoicesPage = () => {
     return <InvoiceDetail invoice={data} />;
   };
 
+  console.log("dataSource : ", dataSource);
+
   return (
     <div className="grid">
       <div className="col-12">
@@ -419,19 +437,66 @@ const InvoicesPage = () => {
             }
           />
           <div className="flex justify-content-between align-items-center mb-3">
-            <h5>
+            <h5 className="m-0">
               {dataSource === "local" ? "Preview Import Data" : "Invoices"}
             </h5>
-            <div className="flex gap-2 align-items-center">
-              <Button
-                label="Refresh"
-                icon="pi pi-sync"
-                onClick={() => refresh(dbFirst, dbRows)}
-                loading={loading}
-                disabled={dataSource === "local"}
-              />
-            </div>
           </div>
+
+          {dataSource === "db" && (
+            <div className="grid formgrid p-fluid mb-3">
+              <div className="field col-12 md:col-3">
+                <span className="p-input-icon-left w-full">
+                  <i className="pi pi-search" />
+                  <InputText
+                    placeholder="Invoice No"
+                    value={searchInvoiceNo}
+                    onChange={(e) => setSearchInvoiceNo(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && refresh(0, dbRows)}
+                    className="w-full"
+                  />
+                </span>
+              </div>
+              <div className="field col-12 md:col-3">
+                <span className="p-input-icon-left w-full">
+                  <i className="pi pi-search" />
+                  <InputText
+                    placeholder="Customer Name"
+                    value={searchCustomer}
+                    onChange={(e) => setSearchCustomer(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && refresh(0, dbRows)}
+                    className="w-full"
+                  />
+                </span>
+              </div>
+              <div className="field col-12 md:col-3">
+                <span className="p-input-icon-left w-full">
+                  <i className="pi pi-search" />
+                  <InputText
+                    placeholder="Company Code"
+                    value={searchCompany}
+                    onChange={(e) => setSearchCompany(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && refresh(0, dbRows)}
+                    className="w-full"
+                  />
+                </span>
+              </div>
+              <div className="field col-12 md:col-3 flex gap-2">
+                <Button
+                  label="Search"
+                  icon="pi pi-search"
+                  onClick={() => refresh(0, dbRows)}
+                  className="flex-1"
+                />
+                <Button
+                  label="Refresh"
+                  icon="pi pi-sync"
+                  className="p-button-outlined flex-1"
+                  onClick={() => refresh(dbFirst, dbRows)}
+                  loading={loading}
+                />
+              </div>
+            </div>
+          )}
           <DataTable
             value={activeInvoices}
             paginator

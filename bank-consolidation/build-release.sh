@@ -6,7 +6,7 @@ echo "Step 1: Building Frontend (Next.js export)"
 echo "---------------------------------------------------"
 cd frontend
 # Clean previous build
-rm -rf out
+rm -rf out .next
 # Install dependencies if needed
 if [ ! -d "node_modules" ]; then
     echo "Installing frontend dependencies..."

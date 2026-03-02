@@ -15,6 +15,10 @@ echo "Backend Port: $ADDR"
 echo "Data Directory: $APP_DATA_DIR"
 echo "---------------------------------------------------"
 
+# Kill existing process if running
+pkill -f bank-app-mac || true
+sleep 1
+
 # Run the compiled binary in background
 ./bank-app-mac &
 BACKEND_PID=$!
