@@ -51,6 +51,14 @@ func (c InvoiceController) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Calculate TotalTax from details
+	var calculatedTax float64
+	for _, d := range header.Details {
+		calculatedTax += d.Ppn
+	}
+	header.TotalTax = calculatedTax
+
 	if err := validateInvoiceHeader(header); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -117,8 +125,15 @@ func (c InvoiceController) BulkCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for i, h := range headers {
-		if err := validateInvoiceHeader(h); err != nil {
+	for i := range headers {
+		// Calculate TotalTax from details
+		var calculatedTax float64
+		for _, d := range headers[i].Details {
+			calculatedTax += d.Ppn
+		}
+		headers[i].TotalTax = calculatedTax
+
+		if err := validateInvoiceHeader(headers[i]); err != nil {
 			http.Error(w, fmt.Sprintf("index %d: %v", i, err), http.StatusBadRequest)
 			return
 		}
@@ -130,7 +145,10 @@ func (c InvoiceController) BulkCreate(w http.ResponseWriter, r *http.Request) {
 				header.Status = "pending"
 			}
 
-			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&header).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "id"}},
+				DoUpdates: clause.AssignmentColumns([]string{"invoice_no", "invoice_date", "customer_id", "customer_name", "total_amount", "total_tax", "company_code"}),
+			}).Create(&header).Error; err != nil {
 				return err
 			}
 
@@ -289,6 +307,21 @@ func (c InvoiceController) CreateOrList(w http.ResponseWriter, r *http.Request) 
 
 		// Subquery for paid amount
 		paidSubquery := "(SELECT COALESCE(SUM(matched_amount), 0) FROM bank_entry_invoices WHERE invoice_header_id = invoice_headers.id)"
+
+		// Payment Status filter
+		if v := q.Get("paymentStatus"); v != "" {
+			switch v {
+			case "paid":
+				// Paid amount close to or greater than total amount
+				db = db.Where(fmt.Sprintf("%s >= (total_amount - 0.01)", paidSubquery))
+			case "partial":
+				// Paid amount > 0 and less than total amount
+				db = db.Where(fmt.Sprintf("%s > 0 AND %s < (total_amount - 0.01)", paidSubquery, paidSubquery))
+			case "unpaid":
+				// Paid amount is 0
+				db = db.Where(fmt.Sprintf("%s = 0", paidSubquery))
+			}
+		}
 
 		// Option to exclude fully paid
 		if v := q.Get("excludeFullyPaid"); v == "1" || strings.EqualFold(v, "true") {

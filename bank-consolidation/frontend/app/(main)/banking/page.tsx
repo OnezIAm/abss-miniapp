@@ -106,6 +106,7 @@ const BankingPage = () => {
   const [recSearchCustomer, setRecSearchCustomer] = useState("");
   const [recSearchCompany, setRecSearchCompany] = useState("");
   const [recSearchInvoiceNo, setRecSearchInvoiceNo] = useState("");
+  const [recPaymentStatus, setRecPaymentStatus] = useState<string | null>(null);
 
   const [viewAttachedVisible, setViewAttachedVisible] = useState(false);
   const [viewAttachedEntry, setViewAttachedEntry] = useState<{
@@ -487,9 +488,7 @@ const BankingPage = () => {
   };
 
   const formatDisplayDate = (s: string) => {
-    const iso = formatDateToISO(s);
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? s : d.toLocaleDateString();
+    return formatDateToISO(s);
   };
 
   const toBankEntry = (t: Transaction): BankEntry => ({
@@ -544,14 +543,19 @@ const BankingPage = () => {
     }
   };
 
-  const normalizeResponse = (respData: any) => {
-    const entries = Array.isArray(respData)
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "match" | "partial" | "unreconciled"
+  >("all");
+
+  const normalizeResponse = (respData: any, opts?: { status?: string }) => {
+    let entries = Array.isArray(respData)
       ? respData
       : Array.isArray(respData?.data)
       ? respData.data
       : Array.isArray(respData?.items)
       ? respData.items
       : [];
+
     const p = respData?.pagination || {};
     return {
       entries,
@@ -571,6 +575,7 @@ const BankingPage = () => {
       bankCode?: string;
       description?: string;
       branch?: string;
+      status?: string;
     },
   ) => {
     try {
@@ -600,6 +605,13 @@ const BankingPage = () => {
       const branchParam =
         opts?.branch !== undefined ? opts.branch : searchBranch;
 
+      const statusParam =
+        opts?.status !== undefined
+          ? opts.status
+          : statusFilter !== "all"
+          ? statusFilter
+          : undefined;
+
       const { data } = await api.get<BankEntry[]>("/bank-entries", {
         params: {
           bankCode: activeBank,
@@ -609,9 +621,10 @@ const BankingPage = () => {
           month: monthParam,
           description: descParam,
           branch: branchParam,
+          status: statusParam,
         },
       });
-      const norm = normalizeResponse(data);
+      const norm = normalizeResponse(data, { status: opts?.status });
       setDbEntries(norm.entries);
       setDbTotal(norm.total);
       setDbOffset(norm.offset);
@@ -676,7 +689,12 @@ const BankingPage = () => {
   ) => {
     try {
       setInvoiceLoading(true);
-      const params: any = { limit, offset, excludeFullyPaid: true };
+      const params: any = { limit, offset };
+      // Default to excluding fully paid unless a specific status is requested
+      if (!recPaymentStatus) {
+        params.excludeFullyPaid = true;
+      }
+
       const idsToInclude = includeIds || recIncludeIds;
       if (idsToInclude.length > 0) {
         params.includeIds = idsToInclude.join(",");
@@ -684,6 +702,7 @@ const BankingPage = () => {
       if (recSearchCustomer) params.customerName = recSearchCustomer;
       if (recSearchCompany) params.companyCode = recSearchCompany;
       if (recSearchInvoiceNo) params.invoiceNo = recSearchInvoiceNo;
+      if (recPaymentStatus) params.paymentStatus = recPaymentStatus;
 
       const { data } = await api.get("/invoices", { params });
       const entries = Array.isArray(data)
@@ -736,6 +755,7 @@ const BankingPage = () => {
     setRecSearchCustomer("");
     setRecSearchCompany("");
     setRecSearchInvoiceNo("");
+    setRecPaymentStatus(null);
 
     let ids: string[] = [];
     let selection: any[] = [];
@@ -1381,6 +1401,28 @@ const BankingPage = () => {
                   appendTo="self"
                 />
               </div>
+              <div className="flex align-items-center gap-2">
+                <span className="text-600">Recon. Status</span>
+                <SelectButton
+                  value={statusFilter}
+                  onChange={async (e) => {
+                    if (!e.value) return;
+                    setStatusFilter(e.value);
+                    // Trigger refresh to apply filter
+                    if (dataSource === "db" && bank) {
+                      await refreshDatabase(0, rowsPerPage, {
+                        status: e.value,
+                      });
+                    }
+                  }}
+                  options={[
+                    { label: "All", value: "all" },
+                    { label: "Match", value: "match" },
+                    { label: "Partial", value: "partial" },
+                    { label: "Open", value: "unreconciled" },
+                  ]}
+                />
+              </div>
             </div>
           </div>
           {dataSource === "db" && (
@@ -1493,7 +1535,7 @@ const BankingPage = () => {
               )}
             />
             <Column
-              header="Delta"
+              header="Rem. Balance"
               style={{ width: "10%" }}
               body={(row: any) => {
                 const rec = row.entryId
@@ -1514,14 +1556,35 @@ const BankingPage = () => {
                 ) {
                   val = Math.abs(row.amount) - row.matchedTotal;
                   hasData = true;
+                } else {
+                  // Default to full amount if no reconciliation data
+                  val = Math.abs(row.amount);
+                  hasData = true;
                 }
 
                 if (!hasData) return <span>-</span>;
-                const ok = Math.abs(val) < 0.0001;
+
+                const absVal = Math.abs(val);
+                const originalAmount = Math.abs(row.amount);
+                const isZero = absVal < 0.0001;
+                const isFull = Math.abs(absVal - originalAmount) < 0.0001;
+
+                if (isZero) {
+                  return (
+                    <Tag value="Match" severity="success" icon="pi pi-check" />
+                  );
+                }
+
+                if (isFull) {
+                  return <Tag value={formatCurrency(val)} severity="danger" />;
+                }
+
+                // Partial
                 return (
                   <Tag
-                    value={ok ? "0" : formatCurrency(val)}
-                    severity={ok ? "success" : "warning"}
+                    value={formatCurrency(val)}
+                    severity="warning"
+                    icon="pi pi-exclamation-triangle"
                   />
                 );
               }}
@@ -1618,6 +1681,18 @@ const BankingPage = () => {
                 className="w-full p-inputtext-sm"
               />
             </span>
+            <Dropdown
+              value={recPaymentStatus}
+              options={[
+                { label: "Paid", value: "paid" },
+                { label: "Partial", value: "partial" },
+                { label: "Unpaid", value: "unpaid" },
+              ]}
+              onChange={(e) => setRecPaymentStatus(e.value)}
+              placeholder="Status"
+              className="flex-1 w-full"
+              showClear
+            />
             <Button
               icon="pi pi-search"
               className="p-button-sm"

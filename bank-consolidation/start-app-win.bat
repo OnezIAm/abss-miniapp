@@ -13,6 +13,10 @@ echo Backend Port: %ADDR%
 echo Data Directory: %APP_DATA_DIR%
 echo ---------------------------------------------------
 
+:: Kill existing process if running
+echo Stopping existing instances...
+taskkill /F /IM bank-app-win.exe >nul 2>&1
+
 :: Start the backend in a separate window
 start "Bank Consolidation Backend" bank-app-win.exe
 

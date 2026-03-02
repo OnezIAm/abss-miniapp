@@ -4,6 +4,7 @@ import { DataTable, DataTableExpandedRows } from "primereact/datatable";
 import { Column } from "primereact/column";
 import { Button } from "primereact/button";
 import { InputText } from "primereact/inputtext";
+import { Dropdown } from "primereact/dropdown";
 import { Toast } from "primereact/toast";
 import { Tag } from "primereact/tag";
 import { Toolbar } from "primereact/toolbar";
@@ -34,13 +35,11 @@ const formatCurrency = (value: number, currency = "IDR") =>
 const toDisplayDate = (s: string) => {
   if (!s) return "";
   const d = new Date(s);
-  return isNaN(d.getTime())
-    ? s
-    : d.toLocaleDateString("id-ID", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-      });
+  if (isNaN(d.getTime())) return s;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 };
 
 const flattenInvoice = (inv: Invoice): Invoice => {
@@ -83,6 +82,9 @@ const InvoicesPage = () => {
   const [searchCustomer, setSearchCustomer] = useState("");
   const [searchCompany, setSearchCompany] = useState("");
   const [searchInvoiceNo, setSearchInvoiceNo] = useState("");
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState<string | null>(
+    null,
+  );
 
   const [expandedRows, setExpandedRows] = useState<
     any[] | DataTableExpandedRows | undefined
@@ -125,6 +127,7 @@ const InvoicesPage = () => {
       if (searchCustomer) params.customerName = searchCustomer;
       if (searchCompany) params.companyCode = searchCompany;
       if (searchInvoiceNo) params.invoiceNo = searchInvoiceNo;
+      if (filterPaymentStatus) params.paymentStatus = filterPaymentStatus;
 
       const { data } = await api.get("/invoices", {
         params,
@@ -295,6 +298,33 @@ const InvoicesPage = () => {
     }
 
     if (typeof v === "number" && /amount|total|subtotal|grand/i.test(field)) {
+      if (
+        field === "totalAmount" &&
+        row.paidAmount !== undefined &&
+        row.paidAmount !== null
+      ) {
+        const paid = Number(row.paidAmount);
+        const total = Number(v);
+        const remaining = total - paid;
+
+        let statusTag = null;
+        if (paid >= total - 0.01) {
+          statusTag = <Tag value="PAID" severity="success" className="ml-2" />;
+        } else if (paid > 0) {
+          statusTag = (
+            <Tag value="PARTIAL" severity="warning" className="ml-2" />
+          );
+        } else {
+          statusTag = <Tag value="UNPAID" severity="danger" className="ml-2" />;
+        }
+
+        return (
+          <div className="flex align-items-center">
+            <span>{formatCurrency(v)}</span>
+            {statusTag}
+          </div>
+        );
+      }
       return <span>{formatCurrency(v)}</span>;
     }
     if (typeof v === "string" && /date/i.test(field)) {
@@ -480,17 +510,32 @@ const InvoicesPage = () => {
                   />
                 </span>
               </div>
-              <div className="field col-12 md:col-3 flex gap-2">
+              <div className="field col-12 md:col-3">
+                <Dropdown
+                  value={filterPaymentStatus}
+                  options={[
+                    { label: "All Status", value: null },
+                    { label: "Paid", value: "paid" },
+                    { label: "Partial", value: "partial" },
+                    { label: "Unpaid", value: "unpaid" },
+                  ]}
+                  onChange={(e) => setFilterPaymentStatus(e.value)}
+                  placeholder="Payment Status"
+                  className="w-full"
+                  showClear
+                />
+              </div>
+              <div className="field col-12 flex gap-2 justify-content-end">
                 <Button
                   label="Search"
                   icon="pi pi-search"
                   onClick={() => refresh(0, dbRows)}
-                  className="flex-1"
+                  className="w-auto"
                 />
                 <Button
                   label="Refresh"
                   icon="pi pi-sync"
-                  className="p-button-outlined flex-1"
+                  className="p-button-outlined w-auto"
                   onClick={() => refresh(dbFirst, dbRows)}
                   loading={loading}
                 />

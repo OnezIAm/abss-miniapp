@@ -106,6 +106,21 @@ func (c BankEntryController) CreateOrList(w http.ResponseWriter, r *http.Request
 			db = db.Where("COALESCE(st.attached_count,0) > 0")
 		}
 
+		// Status filter: match, partial, unreconciled
+		if status := q.Get("status"); status != "" {
+			switch status {
+			case "match":
+				// Delta close to 0
+				db = db.Where("ABS(bank_entries.amount) - COALESCE(st.matched_total, 0) < 0.01")
+			case "partial":
+				// Delta > 0 AND Matched > 0
+				db = db.Where("ABS(bank_entries.amount) - COALESCE(st.matched_total, 0) >= 0.01 AND COALESCE(st.matched_total, 0) > 0.01")
+			case "unreconciled":
+				// Matched close to 0
+				db = db.Where("COALESCE(st.matched_total, 0) < 0.01")
+			}
+		}
+
 		// Handle finalized filter
 		// By default, only show non-finalized entries unless specific query param says otherwise
 		// However, for export we might want all or just finalized.
