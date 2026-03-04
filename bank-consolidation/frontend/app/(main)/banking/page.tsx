@@ -12,6 +12,7 @@ import { InputNumber } from "primereact/inputnumber";
 import { InputText } from "primereact/inputtext";
 import { Toast } from "primereact/toast";
 import { Dialog } from "primereact/dialog";
+import { Checkbox } from "primereact/checkbox";
 import { api } from "@/app/lib/api";
 import { BankTypeService } from "@/demo/service/BankTypeService";
 
@@ -91,6 +92,7 @@ const BankingPage = () => {
     id?: string;
     amount: number;
     description: string;
+    date?: string;
   } | null>(null);
   const [invoiceItems, setInvoiceItems] = useState<any[]>([]);
   const [invoiceTotal, setInvoiceTotal] = useState<number>(0);
@@ -107,6 +109,12 @@ const BankingPage = () => {
   const [recSearchCompany, setRecSearchCompany] = useState("");
   const [recSearchInvoiceNo, setRecSearchInvoiceNo] = useState("");
   const [recPaymentStatus, setRecPaymentStatus] = useState<string | null>(null);
+  const [recDateRange, setRecDateRange] = useState<(Date | null)[] | null>(
+    null,
+  );
+  const [recApproxAmount, setRecApproxAmount] = useState<number | null>(null);
+  const [recTolerance, setRecTolerance] = useState<number>(100);
+  const [recFilterAmountEnabled, setRecFilterAmountEnabled] = useState(false);
 
   const [viewAttachedVisible, setViewAttachedVisible] = useState(false);
   const [viewAttachedEntry, setViewAttachedEntry] = useState<{
@@ -694,7 +702,12 @@ const BankingPage = () => {
       if (!recPaymentStatus) {
         params.excludeFullyPaid = true;
       }
-
+      if (recDateRange && recDateRange[0]) {
+        params.startDate = formatDateToISO(recDateRange[0].toISOString());
+      }
+      if (recDateRange && recDateRange[1]) {
+        params.endDate = formatDateToISO(recDateRange[1].toISOString());
+      }
       const idsToInclude = includeIds || recIncludeIds;
       if (idsToInclude.length > 0) {
         params.includeIds = idsToInclude.join(",");
@@ -703,6 +716,10 @@ const BankingPage = () => {
       if (recSearchCompany) params.companyCode = recSearchCompany;
       if (recSearchInvoiceNo) params.invoiceNo = recSearchInvoiceNo;
       if (recPaymentStatus) params.paymentStatus = recPaymentStatus;
+      if (recFilterAmountEnabled && recApproxAmount !== null) {
+        params.approxAmount = recApproxAmount;
+        params.tolerance = recTolerance;
+      }
 
       const { data } = await api.get("/invoices", { params });
       const entries = Array.isArray(data)
@@ -713,11 +730,17 @@ const BankingPage = () => {
         ? data.items
         : [];
       const p = data?.pagination || {};
-      setInvoiceItems(entries);
-      setInvoiceTotal(typeof p.total === "number" ? p.total : entries.length);
+      // Filter out potential duplicates based on ID
+      const uniqueEntries = Array.from(
+        new Map(entries.map((item: any) => [item.id, item])).values(),
+      );
+      setInvoiceItems(uniqueEntries);
+      setInvoiceTotal(
+        typeof p.total === "number" ? p.total : uniqueEntries.length,
+      );
       setInvoiceRows(typeof p.limit === "number" ? p.limit : limit);
       setInvoiceFirst(typeof p.offset === "number" ? p.offset : offset);
-      return entries;
+      return uniqueEntries;
     } catch (e: any) {
       const status = e?.response?.status;
       const detail =
@@ -751,11 +774,15 @@ const BankingPage = () => {
       id: row.entryId,
       amount: Math.abs(row.amount),
       description: row.description,
+      date: row.date,
     });
     setRecSearchCustomer("");
     setRecSearchCompany("");
     setRecSearchInvoiceNo("");
     setRecPaymentStatus(null);
+    setRecApproxAmount(Math.abs(row.amount));
+    setRecTolerance(100);
+    setRecFilterAmountEnabled(true);
 
     let ids: string[] = [];
     let selection: any[] = [];
@@ -787,6 +814,11 @@ const BankingPage = () => {
 
     setRecIncludeIds(ids);
     setRecVisible(true);
+    // Don't call refreshInvoices immediately if we are setting IDs, let the useEffect or subsequent logic handle it?
+    // Actually, refreshInvoices logic handles inclusion.
+    // The issue is if ids are already in the list, we might duplicate?
+    // refreshInvoices replaces setInvoiceItems completely, so duplication within list is unlikely unless API returns duplicates.
+    // However, if we call refreshInvoices here, we should ensure we pass the correct params.
     const fetchedItems = await refreshInvoices(0, invoiceRows, ids);
 
     // Ensure selection uses the exact objects from the table data to avoid reference issues
@@ -860,6 +892,11 @@ const BankingPage = () => {
     }
   };
 
+  const handleRecHide = () => {
+    setRecVisible(false);
+    refreshDatabase();
+  };
+
   const saveReconcile = async (
     entryId: string,
     invoices: any[],
@@ -892,11 +929,20 @@ const BankingPage = () => {
       await refreshInvoices(invoiceFirst, invoiceRows, newIds);
     } catch (e: any) {
       console.error("Reconcile error", e);
+      const status = e?.response?.status;
+      const detail =
+        e?.response?.data?.message ||
+        (typeof e?.response?.data === "string" ? e.response.data : undefined) ||
+        e?.message ||
+        "Failed to save reconciliation";
       toast.current?.show({
         severity: "error",
-        summary: "Error",
-        detail: "Failed to save reconciliation",
+        summary: status ? `Error ${status}` : "Error",
+        detail,
+        life: 6000,
       });
+      // Throw error to stop flow
+      throw e;
     }
   };
 
@@ -904,9 +950,9 @@ const BankingPage = () => {
     if (!recEntry?.id) return;
     // const ids = invoiceSelection.map((x) => String(x.id));
 
-    await saveReconcile(recEntry.id, invoiceSelection);
-
     try {
+      await saveReconcile(recEntry.id, invoiceSelection);
+
       const { data: updatedEntry } = await api.get<BankEntry>(
         `/bank-entries/${recEntry.id}`,
       );
@@ -919,11 +965,11 @@ const BankingPage = () => {
         return next;
       });
       setInvoiceSelection([]);
+      setRecVisible(false);
     } catch (e) {
-      console.error("Failed to refresh entry", e);
+      console.error("Failed to refresh entry or save reconcile", e);
+      // Stay on dialog
     }
-
-    setRecVisible(false);
   };
 
   const setNoRecords = async () => {
@@ -1062,6 +1108,35 @@ const BankingPage = () => {
       });
     } finally {
       setFinalizeLoading(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!selectedDbEntries.length) return;
+    if (
+      !window.confirm(
+        `Are you sure you want to delete ${selectedDbEntries.length} entries?`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const ids = selectedDbEntries.map((e: any) => e.entryId).filter(Boolean);
+      await api.delete("/bank-entries", { data: { ids } });
+      toast.current?.show({
+        severity: "success",
+        summary: "Deleted",
+        detail: `${ids.length} entries deleted`,
+      });
+      setSelectedDbEntries([]);
+      refreshDatabase(dbOffset, rowsPerPage);
+    } catch (e) {
+      console.error(e);
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Failed to delete entries",
+      });
     }
   };
 
@@ -1434,6 +1509,13 @@ const BankingPage = () => {
                 onClick={() => router.push("/banking/finalized")}
               />
               <Button
+                label="Delete Selected"
+                icon="pi pi-trash"
+                severity="danger"
+                onClick={handleBulkDelete}
+                disabled={!selectedDbEntries.length}
+              />
+              <Button
                 label="Finalize Selected"
                 icon="pi pi-check-square"
                 severity="success"
@@ -1621,12 +1703,49 @@ const BankingPage = () => {
       </div>
       <Dialog
         visible={recVisible}
-        onHide={() => setRecVisible(false)}
+        onHide={handleRecHide}
         header="Reconcile Invoices"
-        style={{ width: "60vw" }}
+        style={{ width: "120vw" }}
         modal
       >
         <div className="mb-3">
+          {recEntry && (
+            <div className="p-fluid grid formgrid mb-3">
+              <div className="field col-12 md:col-3">
+                <label htmlFor="recDate" className="font-bold">
+                  Date
+                </label>
+                <InputText
+                  id="recDate"
+                  value={formatDisplayDate(recEntry.date || "")}
+                  readOnly
+                  className="p-inputtext-sm bg-gray-50"
+                />
+              </div>
+              <div className="field col-12 md:col-6">
+                <label htmlFor="recDesc" className="font-bold">
+                  Description
+                </label>
+                <InputText
+                  id="recDesc"
+                  value={recEntry.description}
+                  readOnly
+                  className="p-inputtext-sm bg-gray-50"
+                />
+              </div>
+              <div className="field col-12 md:col-3">
+                <label htmlFor="recAmount" className="font-bold">
+                  Amount
+                </label>
+                <InputText
+                  id="recAmount"
+                  value={formatCurrency(recEntry.amount)}
+                  readOnly
+                  className="p-inputtext-sm bg-gray-50 text-right font-bold"
+                />
+              </div>
+            </div>
+          )}
           <div className="text-700 mb-2">
             Record:{" "}
             <strong>{recEntry ? formatCurrency(recEntry.amount) : "-"}</strong>
@@ -1644,61 +1763,179 @@ const BankingPage = () => {
               {formatCurrency(currentDelta)}
             </strong>
           </div>
-          <div className="flex gap-2">
-            <span className="p-input-icon-left flex-1">
-              <i className="pi pi-search" />
-              <InputText
-                value={recSearchInvoiceNo}
-                onChange={(e) => setRecSearchInvoiceNo(e.target.value)}
-                onKeyDown={(e) =>
-                  e.key === "Enter" && refreshInvoices(0, invoiceRows)
-                }
-                placeholder="Invoice No"
-                className="w-full p-inputtext-sm"
+
+          {invoiceSelection.length > 0 && (
+            <div className="mb-3 surface-ground p-3 border-round">
+              <div className="flex align-items-center justify-content-between mb-2">
+                <span className="font-bold text-900">Selected Invoices ({invoiceSelection.length})</span>
+                <Button 
+                  label="Clear All" 
+                  icon="pi pi-times" 
+                  className="p-button-text p-button-danger p-button-sm" 
+                  onClick={() => setInvoiceSelection([])}
+                />
+              </div>
+              <DataTable value={invoiceSelection} size="small" className="p-datatable-sm" showGridlines>
+                <Column field="invoiceNo" header="Invoice No" />
+                <Column 
+                  field="customerName" 
+                  header="Customer" 
+                  style={{ maxWidth: "150px" }}
+                  body={(row) => <div className="white-space-nowrap overflow-hidden text-overflow-ellipsis" title={row.customerName}>{row.customerName}</div>}
+                />
+                <Column
+                  field="totalAmount"
+                  header="Total"
+                  body={(row) => formatCurrency(row.totalAmount)}
+                  style={{ textAlign: "right" }}
+                />
+                <Column
+                  header="Remaining"
+                  body={(row) => {
+                     const paid = Number(row.paidAmount) || 0;
+                     const total = Number(row.totalAmount) || 0;
+                     return formatCurrency(total - paid);
+                  }}
+                  style={{ textAlign: "right" }}
+                />
+                <Column
+                  header="Allocation"
+                  style={{ width: "180px" }}
+                  body={(row) => (
+                    <InputNumber
+                      value={allocations[row.id] ?? 0}
+                      onValueChange={(e) => {
+                        const val = e.value ?? 0;
+                        setAllocations((prev) => ({
+                          ...prev,
+                          [row.id]: val,
+                        }));
+                      }}
+                      mode="currency"
+                      currency="IDR"
+                      locale="id-ID"
+                      minFractionDigits={0}
+                      className="w-full"
+                      inputClassName="p-inputtext-sm text-right font-bold"
+                    />
+                  )}
+                />
+                <Column
+                  body={(row) => (
+                    <Button
+                      icon="pi pi-trash"
+                      className="p-button-danger p-button-text p-button-sm"
+                      onClick={() => {
+                         const newSelection = invoiceSelection.filter(i => i.id !== row.id);
+                         setInvoiceSelection(newSelection);
+                      }}
+                      tooltip="Remove"
+                    />
+                  )}
+                  style={{ width: "3rem", textAlign: "center" }}
+                />
+              </DataTable>
+            </div>
+          )}
+
+          <div className="flex flex-column gap-2">
+            <div className="flex gap-2">
+              <span className="p-input-icon-left flex-1">
+                <i className="pi pi-search" />
+                <InputText
+                  value={recSearchInvoiceNo}
+                  onChange={(e) => setRecSearchInvoiceNo(e.target.value)}
+                  onKeyDown={(e) =>
+                    e.key === "Enter" && refreshInvoices(0, invoiceRows)
+                  }
+                  placeholder="Invoice No"
+                  className="w-full p-inputtext-sm"
+                />
+              </span>
+              <span className="p-input-icon-left flex-1">
+                <i className="pi pi-search" />
+                <InputText
+                  value={recSearchCustomer}
+                  onChange={(e) => setRecSearchCustomer(e.target.value)}
+                  onKeyDown={(e) =>
+                    e.key === "Enter" && refreshInvoices(0, invoiceRows)
+                  }
+                  placeholder="Customer Name"
+                  className="w-full p-inputtext-sm"
+                />
+              </span>
+              <span className="p-input-icon-left flex-1">
+                <i className="pi pi-search" />
+                <InputText
+                  value={recSearchCompany}
+                  onChange={(e) => setRecSearchCompany(e.target.value)}
+                  onKeyDown={(e) =>
+                    e.key === "Enter" && refreshInvoices(0, invoiceRows)
+                  }
+                  placeholder="Company Code"
+                  className="w-full p-inputtext-sm"
+                />
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <Dropdown
+                value={recPaymentStatus}
+                options={[
+                  { label: "Paid", value: "paid" },
+                  { label: "Partial", value: "partial" },
+                  { label: "Unpaid", value: "unpaid" },
+                ]}
+                onChange={(e) => setRecPaymentStatus(e.value)}
+                placeholder="Status"
+                className="flex-1 w-full"
+                showClear
               />
-            </span>
-            <span className="p-input-icon-left flex-1">
-              <i className="pi pi-search" />
-              <InputText
-                value={recSearchCustomer}
-                onChange={(e) => setRecSearchCustomer(e.target.value)}
-                onKeyDown={(e) =>
-                  e.key === "Enter" && refreshInvoices(0, invoiceRows)
-                }
-                placeholder="Customer Name"
-                className="w-full p-inputtext-sm"
+              <Calendar
+                value={recDateRange}
+                onChange={(e) => setRecDateRange(e.value ?? null)}
+                selectionMode="range"
+                placeholder="Date Range"
+                className="flex-1 w-full"
+                showIcon
+                dateFormat="yy-mm-dd"
               />
-            </span>
-            <span className="p-input-icon-left flex-1">
-              <i className="pi pi-search" />
-              <InputText
-                value={recSearchCompany}
-                onChange={(e) => setRecSearchCompany(e.target.value)}
-                onKeyDown={(e) =>
-                  e.key === "Enter" && refreshInvoices(0, invoiceRows)
-                }
-                placeholder="Company Code"
-                className="w-full p-inputtext-sm"
+              <div className="flex align-items-center">
+                <Checkbox
+                  inputId="cbAmount"
+                  checked={recFilterAmountEnabled}
+                  onChange={(e) =>
+                    setRecFilterAmountEnabled(e.checked ?? false)
+                  }
+                  className="mr-2"
+                />
+                <InputNumber
+                  value={recApproxAmount}
+                  onValueChange={(e) => setRecApproxAmount(e.value ?? null)}
+                  placeholder="Amount"
+                  className="flex-1 w-full"
+                  minFractionDigits={0}
+                  mode="currency"
+                  currency="IDR"
+                  locale="id-ID"
+                  disabled={!recFilterAmountEnabled}
+                />
+              </div>
+              <InputNumber
+                value={recTolerance}
+                onValueChange={(e) => setRecTolerance(e.value ?? 0)}
+                placeholder="Tol"
+                className="w-8rem"
+                minFractionDigits={0}
+                tooltip="Tolerance"
+                disabled={!recFilterAmountEnabled}
               />
-            </span>
-            <Dropdown
-              value={recPaymentStatus}
-              options={[
-                { label: "Paid", value: "paid" },
-                { label: "Partial", value: "partial" },
-                { label: "Unpaid", value: "unpaid" },
-              ]}
-              onChange={(e) => setRecPaymentStatus(e.value)}
-              placeholder="Status"
-              className="flex-1 w-full"
-              showClear
-            />
-            <Button
-              icon="pi pi-search"
-              className="p-button-sm"
-              onClick={() => refreshInvoices(0, invoiceRows)}
-              tooltip="Apply Filter"
-            />
+              <Button
+                icon="pi pi-search"
+                className="p-button-sm"
+                onClick={() => refreshInvoices(0, invoiceRows)}
+                tooltip="Apply Filter"
+              />
+            </div>
           </div>
         </div>
         <DataTable
@@ -1832,7 +2069,13 @@ const BankingPage = () => {
           dataKey="id"
         >
           <Column field="invoiceNo" header="Invoice No" />
-          <Column field="invoiceDate" header="Date" />
+          <Column
+            field="invoiceDate"
+            header="Date"
+            body={(r: AttachedInvoice) => (
+              <span>{formatDisplayDate(r.invoiceDate)}</span>
+            )}
+          />
           <Column field="customerName" header="Customer" />
           <Column
             field="totalAmount"
@@ -1863,6 +2106,7 @@ const BankingPage = () => {
                 setManualData({ ...manualData, date: e.value as Date })
               }
               showIcon
+              dateFormat="yy-mm-dd"
             />
           </div>
           <div className="flex flex-column gap-2">

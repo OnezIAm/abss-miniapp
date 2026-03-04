@@ -28,3 +28,16 @@ frontend-build:
 	@echo "Building frontend..."
 	cd frontend && npm install && npm run build
 	@echo "Frontend built!"
+
+clean-db:
+	@printf "Warning: This will delete all data in bank.db. Are you sure? [y/N] "; \
+	read ans; \
+	if [ "$$ans" != "y" ]; then \
+		echo "Aborted."; \
+		exit 1; \
+	fi
+	@echo "Backing up database..."
+	cp data/bank.db data/bank.db.bak
+	@echo "Cleaning up database..."
+	sqlite3 data/bank.db < data/cleanup_data.sql
+	@echo "Database cleaned up and vacuumed."

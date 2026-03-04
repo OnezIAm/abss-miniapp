@@ -305,6 +305,20 @@ func (c InvoiceController) CreateOrList(w http.ResponseWriter, r *http.Request) 
 			db = db.Where("invoice_date <= ?", v)
 		}
 
+		// Amount filter with tolerance
+		if v := q.Get("approxAmount"); v != "" {
+			if amt, err := strconv.ParseFloat(v, 64); err == nil {
+				tol := 100.0 // Default tolerance
+				if t := q.Get("tolerance"); t != "" {
+					if ft, err := strconv.ParseFloat(t, 64); err == nil {
+						tol = ft
+					}
+				}
+				// Check total_amount
+				db = db.Where("ABS(total_amount - ?) <= ?", amt, tol)
+			}
+		}
+
 		// Subquery for paid amount
 		paidSubquery := "(SELECT COALESCE(SUM(matched_amount), 0) FROM bank_entry_invoices WHERE invoice_header_id = invoice_headers.id)"
 
@@ -428,6 +442,53 @@ func (c InvoiceController) CreateOrList(w http.ResponseWriter, r *http.Request) 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (c InvoiceController) Delete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	id := r.URL.Path[len("/invoices/"):]
+	if id == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := c.DB.Delete(&models.InvoiceHeader{}, "id = ?", id).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "id": id})
+}
+
+func (c InvoiceController) BulkDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body.IDs) == 0 {
+		http.Error(w, "ids are required", http.StatusBadRequest)
+		return
+	}
+
+	if err := c.DB.Delete(&models.InvoiceHeader{}, "id IN ?", body.IDs).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": fmt.Sprintf("deleted %d invoices", len(body.IDs))})
 }
 
 func (c InvoiceController) GenerateSample(w http.ResponseWriter, r *http.Request) {

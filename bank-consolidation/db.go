@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bank-consolidation/internal/config"
 	"database/sql"
 	"fmt"
 	"log"
@@ -14,7 +15,7 @@ import (
 )
 
 func initDB(dsn string) *gorm.DB {
-	dataDir := resolveDataDir()
+	dataDir := config.ResolveDataDir()
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("create data dir: %v", err)
 	}
@@ -45,41 +46,6 @@ func initDB(dsn string) *gorm.DB {
 	// 	}
 	// }
 	return db
-}
-
-func resolveDataDir() string {
-	if dir := os.Getenv("APP_DATA_DIR"); dir != "" {
-		return dir
-	}
-
-	if path := os.Getenv("SQLITE_PATH"); path != "" {
-		return filepath.Dir(path)
-	}
-
-	if cwd, err := os.Getwd(); err == nil {
-		if fileExists(filepath.Join(cwd, "go.mod")) {
-			return filepath.Join(cwd, "data")
-		}
-	}
-
-	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "bank-consolidation")
-	}
-
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".bank-consolidation")
-	}
-
-	if exe, err := os.Executable(); err == nil && exe != "" {
-		return filepath.Join(filepath.Dir(exe), "data")
-	}
-
-	return "data"
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func migrate(db *sql.DB) error {

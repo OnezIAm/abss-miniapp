@@ -49,7 +49,10 @@ const FinalizedReconciledPage = () => {
   const [bank, setBank] = useState<string>("");
   const [entries, setEntries] = useState<FinalizedEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [dateFilter, setDateFilter] = useState<Date | null>(new Date());
+  const [dateFilter, setDateFilter] = useState<(Date | null)[] | null>([
+    new Date(),
+    new Date(),
+  ]);
 
   const [viewVisible, setViewVisible] = useState(false);
   const [viewEntry, setViewEntry] = useState<FinalizedEntry | null>(null);
@@ -62,7 +65,11 @@ const FinalizedReconciledPage = () => {
   React.useEffect(() => {
     BankTypeService.getBankTypes()
       .then((data) => {
-        const list = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+        const list = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.data)
+          ? data.data
+          : [];
         setBankList(list);
         if (!bank && list.length > 0) setBank(list[0].code);
       })
@@ -94,23 +101,35 @@ const FinalizedReconciledPage = () => {
     if (!s) return "-";
     const d = new Date(s);
     if (isNaN(d.getTime())) return s;
-    return d.toLocaleDateString("en-GB");
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
   };
 
   const refresh = async () => {
     if (!bank) return;
     setLoading(true);
     try {
-      const params: any = { bankCode: bank, showFinalized: "true", reconciledOnly: "true" };
-      if (dateFilter) {
-        // Backend expects startDate/endDate. 
-        // If we select a single date, we pass it as both start and end to filter for that day.
-        const year = dateFilter.getFullYear();
-        const month = String(dateFilter.getMonth() + 1).padStart(2, '0');
-        const day = String(dateFilter.getDate()).padStart(2, '0');
-        const dateStr = `${year}-${month}-${day}`;
-        params.startDate = dateStr;
-        params.endDate = dateStr;
+      const params: any = {
+        bankCode: bank,
+        showFinalized: "true",
+        reconciledOnly: "true",
+      };
+      if (dateFilter && dateFilter[0]) {
+        // Backend expects startDate/endDate.
+        const formatDate = (d: Date) => {
+          const year = d.getFullYear();
+          const month = String(d.getMonth() + 1).padStart(2, "0");
+          const day = String(d.getDate()).padStart(2, "0");
+          return `${year}-${month}-${day}`;
+        };
+
+        const start = dateFilter[0];
+        const end = dateFilter[1] ?? start;
+
+        params.startDate = formatDate(start);
+        params.endDate = formatDate(end);
       }
       const res = await api.get("/bank-entries", { params });
       setEntries(normalizeEntries(res.data));
@@ -132,7 +151,11 @@ const FinalizedReconciledPage = () => {
 
   const handleExport = async () => {
     if (!exportRange || !exportRange[0] || !exportRange[1]) {
-      toast.current?.show({ severity: "warn", summary: "Validation", detail: "Please select start and end date" });
+      toast.current?.show({
+        severity: "warn",
+        summary: "Validation",
+        detail: "Please select start and end date",
+      });
       return;
     }
     const [start, end] = exportRange;
@@ -141,27 +164,34 @@ const FinalizedReconciledPage = () => {
     try {
       const formatDate = (d: Date) => {
         const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
         return `${year}-${month}-${day}`;
       };
       const startStr = formatDate(start);
       const endStr = formatDate(end);
       // We want to export reconciled entries that are finalized
       const url = `/bank-entries/export/reconciled?startDate=${startStr}&endDate=${endStr}&showFinalized=true`;
-      
+
       const response = await api.get(url, { responseType: "blob" });
       const href = window.URL.createObjectURL(response.data);
       const link = document.createElement("a");
       link.href = href;
-      link.setAttribute("download", `finalized_reconciled_${startStr}_${endStr}.csv`);
+      link.setAttribute(
+        "download",
+        `finalized_reconciled_${startStr}_${endStr}.csv`,
+      );
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       setExportVisible(false);
     } catch (e) {
       console.error("Export error", e);
-      toast.current?.show({ severity: "error", summary: "Error", detail: "Export failed" });
+      toast.current?.show({
+        severity: "error",
+        summary: "Error",
+        detail: "Export failed",
+      });
     }
   };
 
@@ -172,7 +202,11 @@ const FinalizedReconciledPage = () => {
     setViewInvoices([]);
     try {
       const res = await api.get(`/bank-entries/${entry.id}/invoices`);
-      const list = Array.isArray(res.data) ? res.data : Array.isArray(res.data?.data) ? res.data.data : [];
+      const list = Array.isArray(res.data)
+        ? res.data
+        : Array.isArray(res.data?.data)
+        ? res.data.data
+        : [];
       setViewInvoices(list);
     } catch (err: any) {
       console.error(err);
@@ -191,7 +225,9 @@ const FinalizedReconciledPage = () => {
       const signedAmount = e.amountType === "CR" ? e.amount : -e.amount;
       const matched = Number(e.matchedTotal || 0);
       const delta =
-        typeof e.delta === "number" ? e.delta : Math.abs(Number(e.amount || 0)) - matched;
+        typeof e.delta === "number"
+          ? e.delta
+          : Math.abs(Number(e.amount || 0)) - matched;
       return {
         ...e,
         signedAmount,
@@ -221,10 +257,13 @@ const FinalizedReconciledPage = () => {
             <div className="flex align-items-center gap-2 flex-wrap">
               <Calendar
                 value={dateFilter}
-                onChange={(e) => setDateFilter(e.value as Date)}
-                dateFormat="dd/mm/yy"
+                onChange={(e) => setDateFilter(e.value as (Date | null)[])}
+                selectionMode="range"
+                readOnlyInput
+                dateFormat="yy-mm-dd"
                 showIcon
-                placeholder="Select Date"
+                showButtonBar
+                placeholder="Select Date Range"
               />
               <Dropdown
                 value={bank}
@@ -250,25 +289,44 @@ const FinalizedReconciledPage = () => {
             </div>
           </div>
 
-          <DataTable value={rows} loading={loading} paginator rows={20} rowsPerPageOptions={[20, 50, 100]}>
-            <Column field="transactionDate" header="Date" body={(r) => <span>{formatDisplayDate(r.transactionDate)}</span>} />
+          <DataTable
+            value={rows}
+            loading={loading}
+            paginator
+            rows={20}
+            rowsPerPageOptions={[20, 50, 100]}
+          >
+            <Column
+              field="transactionDate"
+              header="Date"
+              body={(r) => <span>{formatDisplayDate(r.transactionDate)}</span>}
+            />
             <Column field="description" header="Description" />
             <Column
               field="signedAmount"
               header="Amount"
-              body={(r) => <span>{formatCurrency(Number(r.signedAmount || 0))}</span>}
+              body={(r) => (
+                <span>{formatCurrency(Number(r.signedAmount || 0))}</span>
+              )}
             />
             <Column
               field="matched"
               header="Matched"
-              body={(r) => <span>{formatCurrency(Number(r.matched || 0))}</span>}
+              body={(r) => (
+                <span>{formatCurrency(Number(r.matched || 0))}</span>
+              )}
             />
             <Column
               header="Delta"
               body={(r) => {
                 const val = Number(r.delta || 0);
                 const ok = Math.abs(val) < 0.0001;
-                return <Tag value={ok ? "0" : formatCurrency(val)} severity={ok ? "success" : "warning"} />;
+                return (
+                  <Tag
+                    value={ok ? "0" : formatCurrency(val)}
+                    severity={ok ? "success" : "warning"}
+                  />
+                );
               }}
             />
             <Column
@@ -292,28 +350,54 @@ const FinalizedReconciledPage = () => {
           <Dialog
             visible={viewVisible}
             onHide={() => setViewVisible(false)}
-            header={`Attached Invoices${viewEntry ? ` · ${formatCurrency(viewEntry.amountType === "CR" ? viewEntry.amount : -viewEntry.amount)}` : ""}`}
+            header={`Attached Invoices${
+              viewEntry
+                ? ` · ${formatCurrency(
+                    viewEntry.amountType === "CR"
+                      ? viewEntry.amount
+                      : -viewEntry.amount,
+                  )}`
+                : ""
+            }`}
             style={{ width: "60vw" }}
             modal
           >
-            <DataTable value={viewInvoices} loading={viewLoading} paginator rows={10} rowsPerPageOptions={[10, 20, 50]}>
+            <DataTable
+              value={viewInvoices}
+              loading={viewLoading}
+              paginator
+              rows={10}
+              rowsPerPageOptions={[10, 20, 50]}
+            >
               <Column field="invoiceNo" header="Invoice No" />
-              <Column field="invoiceDate" header="Date" body={(r) => <span>{formatDisplayDate(r.invoiceDate || "")}</span>} />
+              <Column
+                field="invoiceDate"
+                header="Date"
+                body={(r) => (
+                  <span>{formatDisplayDate(r.invoiceDate || "")}</span>
+                )}
+              />
               <Column field="customerName" header="Customer" />
               <Column
                 field="totalAmount"
                 header="Total"
-                body={(r) => <span>{formatCurrency(Number(r.totalAmount || 0))}</span>}
+                body={(r) => (
+                  <span>{formatCurrency(Number(r.totalAmount || 0))}</span>
+                )}
               />
               <Column
                 field="paidAmount"
                 header="Paid"
-                body={(r) => <span>{formatCurrency(Number(r.paidAmount || 0))}</span>}
+                body={(r) => (
+                  <span>{formatCurrency(Number(r.paidAmount || 0))}</span>
+                )}
               />
               <Column
                 field="matchedAmount"
                 header="Matched"
-                body={(r) => <span>{formatCurrency(Number(r.matchedAmount || 0))}</span>}
+                body={(r) => (
+                  <span>{formatCurrency(Number(r.matchedAmount || 0))}</span>
+                )}
               />
             </DataTable>
           </Dialog>
@@ -321,26 +405,36 @@ const FinalizedReconciledPage = () => {
           <Dialog
             header="Export Finalized Transactions"
             visible={exportVisible}
-            style={{ width: '450px' }}
+            style={{ width: "450px" }}
             modal
             onHide={() => setExportVisible(false)}
           >
-             <div className="flex flex-column gap-2">
-                <label htmlFor="range">Date Range</label>
-                <Calendar
-                    id="range"
-                    value={exportRange}
-                    onChange={(e) => setExportRange(e.value as any)}
-                    selectionMode="range"
-                    readOnlyInput
-                    showIcon
-                    dateFormat="dd/mm/yy"
-                    className="w-full"
-                />
+            <div className="flex flex-column gap-2">
+              <label htmlFor="range">Date Range</label>
+              <Calendar
+                id="range"
+                value={exportRange}
+                onChange={(e) => setExportRange(e.value as any)}
+                selectionMode="range"
+                readOnlyInput
+                showIcon
+                dateFormat="yy-mm-dd"
+                className="w-full"
+              />
             </div>
             <div className="flex justify-content-end gap-2 mt-3">
-                <Button label="Cancel" icon="pi pi-times" onClick={() => setExportVisible(false)} className="p-button-text" />
-                <Button label="Export" icon="pi pi-check" onClick={handleExport} autoFocus />
+              <Button
+                label="Cancel"
+                icon="pi pi-times"
+                onClick={() => setExportVisible(false)}
+                className="p-button-text"
+              />
+              <Button
+                label="Export"
+                icon="pi pi-check"
+                onClick={handleExport}
+                autoFocus
+              />
             </div>
           </Dialog>
         </div>
@@ -350,4 +444,3 @@ const FinalizedReconciledPage = () => {
 };
 
 export default FinalizedReconciledPage;
-

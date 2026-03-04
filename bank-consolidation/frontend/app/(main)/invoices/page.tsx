@@ -5,6 +5,8 @@ import { Column } from "primereact/column";
 import { Button } from "primereact/button";
 import { InputText } from "primereact/inputtext";
 import { Dropdown } from "primereact/dropdown";
+import { Calendar } from "primereact/calendar";
+import { ConfirmDialog, confirmDialog } from "primereact/confirmdialog";
 import { Toast } from "primereact/toast";
 import { Tag } from "primereact/tag";
 import { Toolbar } from "primereact/toolbar";
@@ -82,6 +84,7 @@ const InvoicesPage = () => {
   const [searchCustomer, setSearchCustomer] = useState("");
   const [searchCompany, setSearchCompany] = useState("");
   const [searchInvoiceNo, setSearchInvoiceNo] = useState("");
+  const [dateRange, setDateRange] = useState<(Date | null)[] | null>(null);
   const [filterPaymentStatus, setFilterPaymentStatus] = useState<string | null>(
     null,
   );
@@ -89,6 +92,7 @@ const InvoicesPage = () => {
   const [expandedRows, setExpandedRows] = useState<
     any[] | DataTableExpandedRows | undefined
   >(undefined);
+  const [selectedInvoices, setSelectedInvoices] = useState<Invoice[]>([]);
 
   const activeInvoices = useMemo(() => {
     if (dataSource === "db") return dbInvoices;
@@ -127,6 +131,12 @@ const InvoicesPage = () => {
       if (searchCustomer) params.customerName = searchCustomer;
       if (searchCompany) params.companyCode = searchCompany;
       if (searchInvoiceNo) params.invoiceNo = searchInvoiceNo;
+      if (dateRange && dateRange[0]) {
+        params.startDate = toDisplayDate(dateRange[0].toISOString());
+      }
+      if (dateRange && dateRange[1]) {
+        params.endDate = toDisplayDate(dateRange[1].toISOString());
+      }
       if (filterPaymentStatus) params.paymentStatus = filterPaymentStatus;
 
       const { data } = await api.get("/invoices", {
@@ -284,6 +294,74 @@ const InvoicesPage = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDelete = (invoice: Invoice) => {
+    confirmDialog({
+      message: `Are you sure you want to delete invoice ${
+        invoice.invoiceNo || invoice.id
+      }?`,
+      header: "Delete Confirmation",
+      icon: "pi pi-exclamation-triangle",
+      accept: async () => {
+        try {
+          setLoading(true);
+          await api.delete(`/invoices/${invoice.id}`);
+          toast.current?.show({
+            severity: "success",
+            summary: "Deleted",
+            detail: "Invoice deleted successfully",
+            life: 3000,
+          });
+          refresh(dbFirst, dbRows);
+        } catch (e: any) {
+          const msg = e.response?.data?.message || e.message || "Delete failed";
+          toast.current?.show({
+            severity: "error",
+            summary: "Error",
+            detail: msg,
+            life: 3000,
+          });
+        } finally {
+          setLoading(false);
+        }
+      },
+    });
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedInvoices.length === 0) return;
+    confirmDialog({
+      message: `Are you sure you want to delete ${selectedInvoices.length} invoices?`,
+      header: "Bulk Delete Confirmation",
+      icon: "pi pi-exclamation-triangle",
+      accept: async () => {
+        try {
+          setLoading(true);
+          const ids = selectedInvoices.map((i) => i.id);
+          await api.delete("/invoices", { data: { ids } });
+          toast.current?.show({
+            severity: "success",
+            summary: "Deleted",
+            detail: `${selectedInvoices.length} invoices deleted successfully`,
+            life: 3000,
+          });
+          setSelectedInvoices([]);
+          refresh(dbFirst, dbRows);
+        } catch (e: any) {
+          const msg =
+            e.response?.data?.message || e.message || "Bulk delete failed";
+          toast.current?.show({
+            severity: "error",
+            summary: "Error",
+            detail: msg,
+            life: 3000,
+          });
+        } finally {
+          setLoading(false);
+        }
+      },
+    });
   };
 
   const renderCell = (row: any, field: string) => {
@@ -451,6 +529,14 @@ const InvoicesPage = () => {
                     }}
                   />
                 )}
+                {dataSource === "db" && selectedInvoices.length > 0 && (
+                  <Button
+                    label="Delete Selected"
+                    icon="pi pi-trash"
+                    severity="danger"
+                    onClick={handleBulkDelete}
+                  />
+                )}
               </div>
             }
             right={
@@ -525,6 +611,17 @@ const InvoicesPage = () => {
                   showClear
                 />
               </div>
+              <div className="field col-12 md:col-3">
+                <Calendar
+                  value={dateRange}
+                  onChange={(e) => setDateRange(e.value ?? null)}
+                  selectionMode="range"
+                  placeholder="Date Range"
+                  className="w-full"
+                  showIcon
+                  dateFormat="yy-mm-dd"
+                />
+              </div>
               <div className="field col-12 flex gap-2 justify-content-end">
                 <Button
                   label="Search"
@@ -544,6 +641,8 @@ const InvoicesPage = () => {
           )}
           <DataTable
             value={activeInvoices}
+            selection={selectedInvoices}
+            onSelectionChange={(e) => setSelectedInvoices(e.value as Invoice[])}
             paginator
             rows={dataSource === "db" ? dbRows : localRows}
             rowsPerPageOptions={[10, 20, 50]}
@@ -567,6 +666,7 @@ const InvoicesPage = () => {
             onRowToggle={(e) => setExpandedRows(e.data)}
             rowExpansionTemplate={rowExpansionTemplate}
           >
+            <Column selectionMode="multiple" headerStyle={{ width: "3em" }} />
             <Column expander style={{ width: "3em" }} />
             {keys.map((k) => (
               <Column
@@ -576,9 +676,26 @@ const InvoicesPage = () => {
                 body={(row) => renderCell(row, k)}
               />
             ))}
+            <Column
+              body={(rowData) => (
+                <div className="flex gap-2">
+                  {dataSource === "db" && (
+                    <Button
+                      icon="pi pi-trash"
+                      rounded
+                      text
+                      severity="danger"
+                      onClick={() => handleDelete(rowData)}
+                    />
+                  )}
+                </div>
+              )}
+              headerStyle={{ width: "4rem" }}
+            />
           </DataTable>
         </div>
       </div>
+      <ConfirmDialog />
       <Toast ref={toast} />
     </div>
   );

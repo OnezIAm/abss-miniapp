@@ -328,6 +328,33 @@ func (c BankEntryController) Delete(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "id": id})
 }
 
+func (c BankEntryController) BulkDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body.IDs) == 0 {
+		http.Error(w, "ids are required", http.StatusBadRequest)
+		return
+	}
+
+	if err := c.DB.Delete(&models.BankEntry{}, "id IN ?", body.IDs).Error; err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": fmt.Sprintf("deleted %d entries", len(body.IDs))})
+}
+
 func (c BankEntryController) BulkCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -418,13 +445,40 @@ func (c BankEntryController) Reconcile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var exists int64
-	if err := c.DB.Model(&models.BankEntry{}).Where("id = ?", id).Count(&exists).Error; err != nil || exists == 0 {
-		http.Error(w, "bank entry not found", http.StatusNotFound)
+	var bankEntry models.BankEntry
+	if err := c.DB.Where("id = ?", id).First(&bankEntry).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "bank entry not found", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 
 	err := c.DB.Transaction(func(tx *gorm.DB) error {
+		// Calculate total proposed allocation
+		var totalProposed float64
+		for _, inv := range p.Invoices {
+			totalProposed += inv.Amount
+		}
+
+		// If not replacing, add existing allocations
+		if !(strings.EqualFold(p.Mode, "replace") || p.Mode == "") {
+			var existingSum float64
+			if err := tx.Model(&models.BankEntryInvoice{}).
+				Where("bank_entry_id = ?", id).
+				Select("COALESCE(SUM(matched_amount), 0)").
+				Scan(&existingSum).Error; err != nil {
+				return err
+			}
+			totalProposed += existingSum
+		}
+
+		// Check if total exceeds bank entry amount (allow small tolerance)
+		if totalProposed > math.Abs(bankEntry.Amount)+0.01 {
+			return fmt.Errorf("total allocation (%.2f) exceeds bank entry amount (%.2f)", totalProposed, math.Abs(bankEntry.Amount))
+		}
+
 		// Validation
 		for _, inv := range p.Invoices {
 			if strings.TrimSpace(inv.ID) == "" {

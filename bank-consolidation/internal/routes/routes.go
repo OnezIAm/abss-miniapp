@@ -17,6 +17,7 @@ func Register(db *gorm.DB, contentFS fs.FS) *gin.Engine {
 	cat := controllers.CategoryController{DB: db}
 	be := controllers.BankEntryController{DB: db}
 	bt := controllers.BankTypeController{DB: db}
+	sys := controllers.SystemController{}
 
 	r := gin.Default()
 
@@ -96,13 +97,20 @@ func Register(db *gorm.DB, contentFS fs.FS) *gin.Engine {
 	}))
 	api := r.Group("/api/v1")
 
+	api.GET("/system/backup", sys.BackupDatabase)
+
 	api.POST("/invoices", func(c *gin.Context) { inv.Create(c.Writer, c.Request) })
 	api.POST("/invoices/bulk", func(c *gin.Context) { inv.BulkCreate(c.Writer, c.Request) })
 	api.POST("/invoices/seed", func(c *gin.Context) { inv.GenerateSample(c.Writer, c.Request) })
+	api.DELETE("/invoices", func(c *gin.Context) { inv.BulkDelete(c.Writer, c.Request) })
 	api.GET("/invoices", func(c *gin.Context) { inv.CreateOrList(c.Writer, c.Request) })
 	api.GET("/invoices/:id", func(c *gin.Context) {
 		c.Request.URL.Path = "/invoices/" + c.Param("id")
 		inv.GetByID(c.Writer, c.Request)
+	})
+	api.DELETE("/invoices/:id", func(c *gin.Context) {
+		c.Request.URL.Path = "/invoices/" + c.Param("id")
+		inv.Delete(c.Writer, c.Request)
 	})
 
 	api.POST("/transactions", func(c *gin.Context) { txc.CreateOrList(c.Writer, c.Request) })
@@ -137,6 +145,9 @@ func Register(db *gorm.DB, contentFS fs.FS) *gin.Engine {
 	api.DELETE("/bank-entries/:id", func(c *gin.Context) {
 		c.Request.URL.Path = "/bank-entries/" + c.Param("id")
 		be.Delete(c.Writer, c.Request)
+	})
+	api.DELETE("/bank-entries", func(c *gin.Context) {
+		be.BulkDelete(c.Writer, c.Request)
 	})
 
 	api.POST("/bank-entries/bulk", func(c *gin.Context) { be.BulkCreate(c.Writer, c.Request) })
